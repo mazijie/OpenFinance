@@ -1,0 +1,116 @@
+{
+  "domain": "finance",
+  "provider": "baostock",
+  "ingested_at": "2026-01-05T10:30:00Z",
+  "source_version": "2026-01-05",
+  "payload_hash": "sample-payload",
+  "request_params": {
+    "symbols": [
+      "000001.SZ",
+      "600519.SH"
+    ],
+    "start_date": "2026-01-05",
+    "end_date": "2026-01-06",
+    "adjustment_type": "qfq"
+  },
+  "raw_response": {
+    "security_master": [
+      {
+        "security_id": "000001.SZ",
+        "symbol": "000001",
+        "exchange": "SZ",
+        "name": "平安银行"
+      },
+      {
+        "security_id": "600519.SH",
+        "symbol": "600519",
+        "exchange": "SH",
+        "name": "贵州茅台"
+      }
+    ],
+    "trading_calendar": [
+      {
+        "exchange": "SH",
+        "trading_date": "2026-01-05",
+        "is_open": true
+      }
+    ],
+    "daily_bars": [
+      {
+        "security_id": "600519.SH",
+        "symbol": "600519",
+        "exchange": "SH",
+        "trading_date": "2026-01-05",
+        "open": 1500.0,
+        "high": 1520.0,
+        "low": 1490.0,
+        "close": 1510.0,
+        "volume": 1200000.0,
+        "amount": 1812000000.0,
+        "turnover": 0.95,
+        "adjustment_type": "qfq",
+        "source_record_id": "600519-2026-01-05-qfq"
+      },
+      {
+        "security_id": "600519.SH",
+        "symbol": "600519",
+        "exchange": "SH",
+        "trading_date": "2026-01-05",
+        "open": 1500.0,
+        "high": 1520.0,
+        "low": 1490.0,
+        "close": 1510.0,
+        "volume": 1200000.0,
+        "amount": 1812000000.0,
+        "turnover": 0.95,
+        "adjustment_type": "qfq",
+        "source_record_id": "600519-2026-01-05-qfq"
+      },
+      {
+        "security_id": "600519.SH",
+        "symbol": "600519",
+        "exchange": "SH",
+        "trading_date": "2026-01-06",
+        "open": 1512.0,
+        "high": 1535.0,
+        "low": 1505.0,
+        "close": 1528.0,
+        "volume": 1300000.0,
+        "amount": 1986400000.0,
+        "turnover": 1.03,
+        "adjustment_type": "qfq",
+        "source_record_id": "600519-2026-01-06-qfq"
+      },
+      {
+        "security_id": "000001.SZ",
+        "symbol": "000001",
+        "exchange": "SZ",
+        "trading_date": "2026-01-05",
+        "open": 12.1,
+        "high": 12.4,
+        "low": 12.0,
+        "close": 12.3,
+        "volume": 86000000.0,
+        "amount": 1056000000.0,
+        "turnover": 1.8,
+        "adjustment_type": "qfq",
+        "source_record_id": "000001-2026-01-05-qfq"
+      },
+      {
+        "security_id": "000001.SZ",
+        "symbol": "000001",
+        "exchange": "SZ",
+        "trading_date": "2026-01-06",
+        "open": 12.3,
+        "high": 12.2,
+        "low": 11.9,
+        "close": 12.5,
+        "volume": 90000000.0,
+        "amount": 1118000000.0,
+        "turnover": 1.9,
+        "adjustment_type": "qfq",
+        "source_record_id": "000001-2026-01-06-qfq"
+      }
+    ]
+  }
+}

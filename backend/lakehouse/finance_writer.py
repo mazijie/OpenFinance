@@ -1,0 +1,319 @@
+"""Silver writer for finance records."""
+
+from __future__ import annotations
+
+from collections.abc import Iterable
+from datetime import datetime
+from datetime import date
+
+from backend.lakehouse.finance_tables import (
+    DAILY_BARS_ARROW_SCHEMA,
+    SECURITY_MASTER_ARROW_SCHEMA,
+    TRADING_CALENDAR_ARROW_SCHEMA,
+    ensure_daily_bars_table,
+    ensure_security_master_table,
+    ensure_trading_calendar_table,
+)
+from backend.logging_utils import get_logger
+from backend.lakehouse.write_coordination import upsert_with_retry
+from backend.schemas.finance import DailyBarRecord, SecurityMasterRecord, TradingCalendarRecord
+
+logger = get_logger(__name__)
+
+
+class _SimpleColumn:
+    def __init__(self, values: list[object]) -> None:
+        self._values = values
+
+    def to_pylist(self) -> list[object]:
+        return list(self._values)
+
+
+class _SimpleArrowTable:
+    def __init__(self, rows: list[dict]) -> None:
+        self._rows = rows
+
+    @classmethod
+    def from_pylist(cls, rows: list[dict], schema=None):  # noqa: ANN001
+        return cls(list(rows))
+
+    @property
+    def num_rows(self) -> int:
+        return len(self._rows)
+
+    def to_pylist(self) -> list[dict]:
+        return list(self._rows)
+
+    def column(self, name: str) -> _SimpleColumn:
+        return _SimpleColumn([row.get(name) for row in self._rows])
+
+
+class FinanceWriter:
+    """Write and read finance records from Iceberg."""
+
+    def __init__(self) -> None:
+        self.security_master_table = ensure_security_master_table()
+        self.trading_calendar_table = ensure_trading_calendar_table()
+        self.daily_bars_table = ensure_daily_bars_table()
+
+    def append_security_master(self, records: list[SecurityMasterRecord]) -> int:
+        if not records:
+            return 0
+        arrow_module = self._get_arrow_module()
+        arrow_table = arrow_module.Table.from_pylist([record.model_dump() for record in records], schema=SECURITY_MASTER_ARROW_SCHEMA)
+        result = upsert_with_retry(
+            lambda: self._reload_security_master(),
+            arrow_table,
+            table_name="security_master",
+            join_cols=["provider", "security_id"],
+        )
+        return result.rows_inserted + result.rows_updated
+
+    def append_trading_calendar(self, records: list[TradingCalendarRecord]) -> int:
+        if not records:
+            return 0
+        arrow_module = self._get_arrow_module()
+        arrow_table = arrow_module.Table.from_pylist([record.model_dump() for record in records], schema=TRADING_CALENDAR_ARROW_SCHEMA)
+        result = upsert_with_retry(
+            lambda: self._reload_trading_calendar(),
+            arrow_table,
+            table_name="trading_calendar",
+            join_cols=["exchange", "trading_date"],
+        )
+        return result.rows_inserted + result.rows_updated
+
+    def append_daily_bars(self, records: list[DailyBarRecord]) -> int:
+        if not records:
+            return 0
+        arrow_module = self._get_arrow_module()
+        arrow_table = arrow_module.Table.from_pylist([record.model_dump() for record in records], schema=DAILY_BARS_ARROW_SCHEMA)
+        result = upsert_with_retry(
+            lambda: self._reload_daily_bars(),
+            arrow_table,
+            table_name="daily_bars",
+            join_cols=["provider", "adjustment_type", "security_id", "trading_date"],
+        )
+        written_count = result.rows_inserted + result.rows_updated
+        logger.info(
+            "Silver 行情写入完成",
+            event="silver_market_written",
+            extra_fields={
+                "offered_count": len(records),
+                "inserted_count": result.rows_inserted,
+                "updated_count": result.rows_updated,
+                "written_count": written_count,
+            },
+        )
+        return written_count
+
+    def scan_security_master(self) -> list[SecurityMasterRecord]:
+        return [SecurityMasterRecord.model_validate(row) for row in self._scan_arrow_table(self.security_master_table).to_pylist()]
+
+    def scan_security_options(self) -> list[dict[str, str]]:
+        """Read only the fields used by the security selector."""
+
+        rows = (
+            self.security_master_table.scan()
+            .select("symbol", "name", "exchange")
+            .to_arrow()
+            .to_pylist()
+        )
+        return [
+            {
+                "symbol": str(row["symbol"]).upper(),
+                "name": str(row["name"]),
+                "exchange": str(row["exchange"]).upper(),
+            }
+            for row in rows
+        ]
+
+    def scan_trading_calendar(self) -> list[TradingCalendarRecord]:
+        return [TradingCalendarRecord.model_validate(row) for row in self._scan_arrow_table(self.trading_calendar_table).to_pylist()]
+
+    def scan_trading_calendar_for_date(self, trading_date: date) -> list[TradingCalendarRecord]:
+        try:
+            from pyiceberg.expressions import EqualTo
+
+            rows = (
+                self.trading_calendar_table.scan(row_filter=EqualTo("trading_date", trading_date))
+                .to_arrow()
+                .to_pylist()
+            )
+        except ImportError:  # pragma: no cover - local fallback
+            rows = self.trading_calendar_table.scan().to_arrow().to_pylist()
+        return [
+            TradingCalendarRecord.model_validate(row)
+            for row in rows
+            if row.get("trading_date") == trading_date
+        ]
+
+    def scan_daily_bars(self) -> list[DailyBarRecord]:
+        return [DailyBarRecord.model_validate(row) for row in self._scan_arrow_table(self.daily_bars_table).to_pylist()]
+
+    def scan_daily_bars_for_query(
+        self,
+        *,
+        symbol: str | None,
+        security_id: str | None,
+        start_date: date,
+        end_date: date,
+        adjustment_type: str,
+        as_of: datetime,
+        limit: int,
+    ) -> list[DailyBarRecord]:
+        """Read one security's visible rows using Iceberg predicate pushdown."""
+
+        try:
+            from pyiceberg.expressions import And, EqualTo, GreaterThanOrEqual, LessThanOrEqual
+
+            predicates = [
+                EqualTo("adjustment_type", adjustment_type),
+                GreaterThanOrEqual("trading_date", start_date),
+                LessThanOrEqual("trading_date", end_date),
+                LessThanOrEqual("available_at", as_of),
+                LessThanOrEqual("ingested_at", as_of),
+            ]
+            if security_id:
+                predicates.append(EqualTo("security_id", security_id))
+            elif symbol:
+                predicates.append(EqualTo("symbol", symbol))
+            else:
+                raise ValueError("symbol or security_id is required")
+
+            rows = (
+                self.daily_bars_table.scan(
+                    row_filter=And(*predicates),
+                )
+                .select(
+                    "security_id",
+                    "symbol",
+                    "exchange",
+                    "trading_date",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "volume",
+                    "amount",
+                    "turnover",
+                    "is_suspended",
+                    "is_st",
+                    "adjustment_factor",
+                    "adjustment_type",
+                    "provider",
+                    "source_record_id",
+                    "source_version",
+                    "payload_hash",
+                    "raw_object_path",
+                    "event_time",
+                    "available_at",
+                    "ingested_at",
+                    "schema_version",
+                )
+                .to_arrow()
+                .to_pylist()
+            )
+            return [DailyBarRecord.model_validate(row) for row in rows]
+        except ImportError:  # pragma: no cover - test fallback without pyiceberg
+            return [
+                bar
+                for bar in self.scan_daily_bars()
+                if (not security_id or bar.security_id == security_id)
+                and (not symbol or bar.symbol.upper() == symbol.upper())
+                and start_date <= bar.trading_date <= end_date
+                and bar.adjustment_type == adjustment_type
+                and bar.available_at <= as_of
+                and bar.ingested_at <= as_of
+            ][:limit]
+
+    def existing_daily_keys(self, keys: Iterable[tuple[str, str, str, object]]) -> set[tuple[str, str, str, object]]:
+        wanted = {key for key in keys}
+        if not wanted:
+            return set()
+        try:  # Predicate pruning avoids materializing the entire daily_bars table.
+            from pyiceberg.expressions import And, In
+
+            providers = sorted({provider for provider, _, _, _ in wanted})
+            adjustment_types = sorted({adjustment_type for _, adjustment_type, _, _ in wanted})
+            security_ids = sorted({security_id for _, _, security_id, _ in wanted})
+            trading_dates = sorted({trading_date for _, _, _, trading_date in wanted if isinstance(trading_date, date)})
+            if not providers or not adjustment_types or not security_ids or not trading_dates:
+                return set()
+            table = self.daily_bars_table.scan(
+                row_filter=And(
+                    In("provider", providers),
+                    In("adjustment_type", adjustment_types),
+                    In("security_id", security_ids),
+                    In("trading_date", trading_dates),
+                )
+            ).to_arrow()
+            return {
+                (row["provider"], row["adjustment_type"], row["security_id"], row["trading_date"])
+                for row in table.to_pylist()
+                if (row["provider"], row["adjustment_type"], row["security_id"], row["trading_date"]) in wanted
+            }
+        except ImportError:  # pragma: no cover - test fallback without pyiceberg
+            return {
+                (bar.provider, bar.adjustment_type, bar.security_id, bar.trading_date)
+                for bar in self.scan_daily_bars()
+                if (bar.provider, bar.adjustment_type, bar.security_id, bar.trading_date) in wanted
+            }
+
+    def scan_daily_bar_keys(
+        self,
+        *,
+        provider: str,
+        adjustment_type: str,
+        start_date: date,
+        end_date: date,
+    ) -> set[tuple[str, date]]:
+        """Return security/date keys in a narrow partition-pruned range."""
+
+        try:
+            from pyiceberg.expressions import And, EqualTo, GreaterThanOrEqual, LessThanOrEqual
+
+            table = self.daily_bars_table.scan(
+                row_filter=And(
+                    EqualTo("provider", provider),
+                    EqualTo("adjustment_type", adjustment_type),
+                    GreaterThanOrEqual("trading_date", start_date),
+                    LessThanOrEqual("trading_date", end_date),
+                )
+            ).select("security_id", "trading_date").to_arrow()
+            return {
+                (str(row["security_id"]), row["trading_date"])
+                for row in table.to_pylist()
+            }
+        except ImportError:  # pragma: no cover - test fallback without pyiceberg
+            return {
+                (bar.security_id, bar.trading_date)
+                for bar in self.scan_daily_bars()
+                if bar.provider == provider
+                and bar.adjustment_type == adjustment_type
+                and start_date <= bar.trading_date <= end_date
+            }
+
+    def _scan_arrow_table(self, table):
+        return table.scan().to_arrow()
+
+    def _reload_security_master(self):
+        self.security_master_table = ensure_security_master_table()
+        return self.security_master_table
+
+    def _reload_trading_calendar(self):
+        self.trading_calendar_table = ensure_trading_calendar_table()
+        return self.trading_calendar_table
+
+    def _reload_daily_bars(self):
+        self.daily_bars_table = ensure_daily_bars_table()
+        return self.daily_bars_table
+
+    def _get_arrow_module(self):
+        try:  # pragma: no cover - exercised in real environment
+            import pyarrow as pa  # type: ignore
+        except ImportError:  # pragma: no cover - test fallback
+            class _ArrowModule:
+                Table = _SimpleArrowTable
+
+            return _ArrowModule()
+        return pa

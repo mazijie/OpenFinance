@@ -1,0 +1,1 @@
+"""Investment monitoring domain."""

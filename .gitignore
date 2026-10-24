@@ -1,0 +1,51 @@
+# Local secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.secret
+*.secrets
+credentials.json
+service-account*.json
+secrets.yml
+secrets.yaml
+secrets.json
+
+# Runtime state and caches
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+runtime/*.json
+runtime/*
+!runtime/.gitkeep
+spark-warehouse/
+metastore_db/
+derby.log
+
+# Local documentation backups
+README.original.md
+README.local.md
+功能介绍.md
+实现方案.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Logs and local output
+*.log
+*.tmp
+*.pid
+
+# IDE
+.idea/
+.vscode/

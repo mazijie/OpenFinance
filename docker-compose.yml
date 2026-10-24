@@ -1,0 +1,353 @@
+services:
+  spark-master:
+    image: ${SPARK_LEARNING_IMAGE:-openfinance-spark-learning:4.1.2-iceberg1.12}
+    build:
+      context: .
+      dockerfile: spark/Dockerfile
+      args:
+        SPARK_BASE_IMAGE: ${SPARK_BASE_IMAGE:-docker.1ms.run/apache/spark:4.1.2-python3}
+    container_name: openfinance-spark-master
+    profiles: ["spark"]
+    environment:
+      ICEBERG_WAREHOUSE: ${ICEBERG_WAREHOUSE:-s3://openfinance-warehouse/}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      POSTGRES_USER: ${POSTGRES_USER:-openfinance}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-openfinance}
+    command:
+      - /opt/spark/bin/spark-class
+      - org.apache.spark.deploy.master.Master
+      - --host
+      - spark-master
+      - --port
+      - "7077"
+      - --webui-port
+      - "8080"
+    ports:
+      - "7077:7077"
+      - "8081:8080"
+    volumes:
+      - .:/opt/openfinance
+    working_dir: /opt/openfinance
+
+  spark-worker:
+    image: ${SPARK_LEARNING_IMAGE:-openfinance-spark-learning:4.1.2-iceberg1.12}
+    build:
+      context: .
+      dockerfile: spark/Dockerfile
+      args:
+        SPARK_BASE_IMAGE: ${SPARK_BASE_IMAGE:-docker.1ms.run/apache/spark:4.1.2-python3}
+    container_name: openfinance-spark-worker
+    profiles: ["spark"]
+    environment:
+      ICEBERG_WAREHOUSE: ${ICEBERG_WAREHOUSE:-s3://openfinance-warehouse/}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      POSTGRES_USER: ${POSTGRES_USER:-openfinance}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-openfinance}
+    depends_on:
+      - spark-master
+    command:
+      - /opt/spark/bin/spark-class
+      - org.apache.spark.deploy.worker.Worker
+      - spark://spark-master:7077
+      - --cores
+      - "2"
+      - --memory
+      - 2g
+    ports:
+      - "8082:8081"
+    volumes:
+      - .:/opt/openfinance
+    working_dir: /opt/openfinance
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: openfinance-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      postgres-bootstrap:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      opensearch:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://openfinance:openfinance@postgres:5432/openfinance
+      MINIO_ENDPOINT: minio:9000
+      ICEBERG_CATALOG_URI: postgresql+psycopg://openfinance:openfinance@postgres:5432/openfinance
+      OPENFINANCE_INTERNAL_API_BASE_URL: http://backend:8000
+      OPENFINANCE_INTERNAL_API_TOKEN: ${OPENFINANCE_INTERNAL_API_TOKEN:-replace-with-a-shared-internal-token}
+      OPENSEARCH_URL: http://opensearch:9200
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    command:
+      - sh
+      - -c
+      - alembic upgrade head && uvicorn backend.main:app --host 0.0.0.0 --port 8000
+
+  backend-worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      postgres-bootstrap:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://openfinance:openfinance@postgres:5432/openfinance
+      MINIO_ENDPOINT: minio:9000
+      ICEBERG_CATALOG_URI: postgresql+psycopg://openfinance:openfinance@postgres:5432/openfinance
+      OPENFINANCE_INTERNAL_API_TOKEN: ${OPENFINANCE_INTERNAL_API_TOKEN:-replace-with-a-shared-internal-token}
+    volumes:
+      - .:/app
+    command: ["python", "-m", "backend.workers.a_share_ingestion_worker"]
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: openfinance-postgres
+    environment:
+      POSTGRES_DB: openfinance
+      POSTGRES_USER: openfinance
+      POSTGRES_PASSWORD: openfinance
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openfinance -d openfinance"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-bootstrap:
+    image: pgvector/pgvector:pg16
+    container_name: openfinance-postgres-bootstrap
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: openfinance
+    command:
+      - bash
+      - -c
+      - |
+        set -e
+
+        until pg_isready -h postgres -U openfinance -d postgres; do
+          echo "waiting for postgres..."
+          sleep 2
+        done
+
+        if ! psql -h postgres -U openfinance -d postgres -tAc \
+          "SELECT 1 FROM pg_database WHERE datname = 'openfinance'" \
+          | grep -q 1; then
+          echo "creating database openfinance..."
+          createdb -h postgres -U openfinance openfinance
+        else
+          echo "database openfinance already exists"
+        fi
+
+        if ! psql -h postgres -U openfinance -d postgres -tAc \
+          "SELECT 1 FROM pg_database WHERE datname = 'airflow'" \
+          | grep -q 1; then
+          echo "creating database airflow..."
+          createdb -h postgres -U openfinance airflow
+        else
+          echo "database airflow already exists"
+        fi
+
+        psql -h postgres -U openfinance -d openfinance -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+        echo "database bootstrap completed"
+    restart: "no"
+
+  opensearch:
+    image: opensearchproject/opensearch:2.19.1
+    container_name: openfinance-opensearch
+    environment:
+      - discovery.type=single-node
+      - plugins.security.disabled=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_PASSWORD:-replace-with-a-strong-password}
+    ports:
+      - "9200:9200"
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: openfinance-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: openfinance-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc mb --ignore-existing local/openfinance-bronze &&
+      mc mb --ignore-existing local/openfinance-warehouse
+      "
+    restart: "no"
+
+  airflow-init:
+    profiles: ["airflow"]
+    build:
+      context: .
+      dockerfile: airflow/Dockerfile
+    container_name: openfinance-airflow-init
+    depends_on:
+      postgres:
+        condition: service_healthy
+      postgres-bootstrap:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment:
+      AIRFLOW_HOME: /opt/airflow
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/openfinance/airflow/dags
+      AIRFLOW__CORE__EXECUTOR: ${AIRFLOW__CORE__EXECUTOR:-LocalExecutor}
+      AIRFLOW__CORE__LOAD_EXAMPLES: ${AIRFLOW__CORE__LOAD_EXAMPLES:-False}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://openfinance:openfinance@postgres:5432/airflow}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-replace-with-a-generated-fernet-key}
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY:-replace-with-a-secret-key}
+      PYTHONPATH: /opt/openfinance
+      OPENFINANCE_ROOT: /opt/openfinance
+      OPENFINANCE_INTERNAL_API_BASE_URL: http://backend:8000
+      OPENFINANCE_INTERNAL_API_TOKEN: ${OPENFINANCE_INTERNAL_API_TOKEN:-replace-with-a-shared-internal-token}
+      NEWS_INGEST_LIMIT: ${NEWS_INGEST_LIMIT:-20}
+      NEWS_INGEST_LOOKBACK_HOURS: ${NEWS_INGEST_LOOKBACK_HOURS:-6}
+      NEWS_AIRFLOW_SCHEDULE: ${NEWS_AIRFLOW_SCHEDULE:-*/30 * * * *}
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USERNAME:-admin}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-admin}
+      _AIRFLOW_WWW_USER_FIRSTNAME: ${AIRFLOW_ADMIN_FIRSTNAME:-OpenFinance}
+      _AIRFLOW_WWW_USER_LASTNAME: ${AIRFLOW_ADMIN_LASTNAME:-Admin}
+      _AIRFLOW_WWW_USER_EMAIL: ${AIRFLOW_ADMIN_EMAIL:-admin@example.com}
+    volumes:
+      - .:/opt/openfinance
+      - airflow_logs:/opt/airflow/logs
+    command: >
+      bash -c "
+      airflow db migrate &&
+      airflow users create
+      --role Admin
+      --username $${_AIRFLOW_WWW_USER_USERNAME}
+      --password $${_AIRFLOW_WWW_USER_PASSWORD}
+      --firstname $${_AIRFLOW_WWW_USER_FIRSTNAME}
+      --lastname $${_AIRFLOW_WWW_USER_LASTNAME}
+      --email $${_AIRFLOW_WWW_USER_EMAIL} || true
+      "
+    restart: "no"
+
+  airflow-webserver:
+    profiles: ["airflow"]
+    build:
+      context: .
+      dockerfile: airflow/Dockerfile
+    container_name: openfinance-airflow-webserver
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      backend:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      AIRFLOW_HOME: /opt/airflow
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/openfinance/airflow/dags
+      AIRFLOW__CORE__EXECUTOR: ${AIRFLOW__CORE__EXECUTOR:-LocalExecutor}
+      AIRFLOW__CORE__LOAD_EXAMPLES: ${AIRFLOW__CORE__LOAD_EXAMPLES:-False}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://openfinance:openfinance@postgres:5432/airflow}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-replace-with-a-generated-fernet-key}
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY:-replace-with-a-secret-key}
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "False"
+      PYTHONPATH: /opt/openfinance
+      OPENFINANCE_ROOT: /opt/openfinance
+      OPENFINANCE_INTERNAL_API_BASE_URL: http://backend:8000
+      OPENFINANCE_INTERNAL_API_TOKEN: ${OPENFINANCE_INTERNAL_API_TOKEN:-replace-with-a-shared-internal-token}
+      NEWS_INGEST_LIMIT: ${NEWS_INGEST_LIMIT:-20}
+      NEWS_INGEST_LOOKBACK_HOURS: ${NEWS_INGEST_LOOKBACK_HOURS:-6}
+      NEWS_AIRFLOW_SCHEDULE: ${NEWS_AIRFLOW_SCHEDULE:-*/30 * * * *}
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/opt/openfinance
+      - airflow_logs:/opt/airflow/logs
+    command: webserver
+
+  airflow-scheduler:
+    profiles: ["airflow"]
+    build:
+      context: .
+      dockerfile: airflow/Dockerfile
+    container_name: openfinance-airflow-scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      backend:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      AIRFLOW_HOME: /opt/airflow
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/openfinance/airflow/dags
+      AIRFLOW__CORE__EXECUTOR: ${AIRFLOW__CORE__EXECUTOR:-LocalExecutor}
+      AIRFLOW__CORE__LOAD_EXAMPLES: ${AIRFLOW__CORE__LOAD_EXAMPLES:-False}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://openfinance:openfinance@postgres:5432/airflow}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-replace-with-a-generated-fernet-key}
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY:-replace-with-a-secret-key}
+      PYTHONPATH: /opt/openfinance
+      OPENFINANCE_ROOT: /opt/openfinance
+      OPENFINANCE_INTERNAL_API_BASE_URL: http://backend:8000
+      OPENFINANCE_INTERNAL_API_TOKEN: ${OPENFINANCE_INTERNAL_API_TOKEN:-replace-with-a-shared-internal-token}
+      NEWS_INGEST_LIMIT: ${NEWS_INGEST_LIMIT:-20}
+      NEWS_INGEST_LOOKBACK_HOURS: ${NEWS_INGEST_LOOKBACK_HOURS:-6}
+      NEWS_AIRFLOW_SCHEDULE: ${NEWS_AIRFLOW_SCHEDULE:-*/30 * * * *}
+    volumes:
+      - .:/opt/openfinance
+      - airflow_logs:/opt/airflow/logs
+    command: scheduler
+
+volumes:
+  postgres_data:
+  minio_data:
+  airflow_logs:
+  opensearch_data:
