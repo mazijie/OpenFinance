@@ -24,7 +24,7 @@
           <button class="nav-button" type="button" data-page="researchPage">新闻和财报</button>
           <button class="nav-button" type="button" data-page="monitorPage">监测收件箱</button>
         </nav>
-        <div class="topbar-status"><span class="status-light"></span><span id="systemStatus">湖仓查询就绪</span></div>
+        <div class="topbar-status"><span class="status-light"></span><span id="systemStatus">数据服务就绪</span></div>
       </div>
     </header>
 
@@ -33,7 +33,7 @@
       <section class="market-panel panel" aria-label="A 股行情">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">LAKEHOUSE MARKET</p>
+            <p class="eyebrow">MARKET OVERVIEW</p>
             <h2>A 股日线行情</h2>
           </div>
           <span class="data-badge" id="marketSourceBadge">等待查询</span>
@@ -47,13 +47,13 @@
           <label class="field field-asof">数据截止时间（可选）<input id="asOfInput" name="as_of" type="datetime-local" /></label>
         </form>
 
-        <div class="market-message" id="marketMessage" role="status">输入证券代码后查询湖仓中的日线数据。</div>
+        <div class="market-message" id="marketMessage" role="status">选择证券和日期后查询日线行情。</div>
         <div class="stat-grid" id="marketStats" aria-live="polite"></div>
 
         <div class="chart-card">
           <div class="chart-heading"><div><h3>K 线与成交量</h3><p id="chartSubtitle">暂无数据</p></div><span class="chart-legend"><i class="legend-up"></i>上涨 <i class="legend-down"></i>下跌</span></div>
           <div class="chart-wrap" id="marketChart" aria-label="日线 K 线图"></div>
-          <div class="chart-empty" id="chartEmpty">暂无内部行情数据</div>
+          <div class="chart-empty" id="chartEmpty">暂无行情数据</div>
         </div>
 
         <div class="lineage-strip" id="lineageStrip"></div>
@@ -65,22 +65,47 @@
       </section>
 
         <section class="chat-panel panel" aria-label="Agent chat">
-          <div class="section-heading"><div><p class="eyebrow">RESEARCH AGENT</p><h2>智能问答</h2></div><span class="status-pill" id="chatStatus">就绪</span></div>
-          <div class="messages" id="messages" aria-live="polite"><article class="message assistant"><div class="bubble">你好！我可以查询湖仓行情并结合已入湖新闻回答问题。试试问我：<br />“查询贵州茅台最近一个月的行情”</div></article></div>
+          <div class="section-heading">
+            <div><p class="eyebrow">RESEARCH AGENT</p><h2>智能问答</h2></div>
+            <div class="heading-actions"><span class="status-pill" id="chatStatus">就绪</span><button class="icon-button" type="button" id="newChatThreadButton" title="新建对话">＋</button></div>
+          </div>
+          <div class="chat-thread-strip">
+            <div class="chat-thread-tabs" id="chatThreadTabs" role="tablist" aria-label="聊天记录"></div>
+          </div>
+          <details class="chat-model-config" id="modelSettingsDetails">
+            <summary><span>模型设置 · DeepSeek</span><span class="model-settings-status" id="modelSettingsStatus">未配置 Key</span></summary>
+            <form id="modelSettingsForm" autocomplete="off">
+              <label class="field">API Key
+                <input id="llmApiKey" name="llm_api_key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-..." />
+              </label>
+              <label class="field">模型
+                <select id="llmModel" name="llm_model">
+                  <option value="deepseek-flash" selected>deepseek-flash</option>
+                  <option value="deepseek-v4-pro">deepseek-v4-pro</option>
+                </select>
+              </label>
+              <div class="chat-model-actions">
+                <button class="primary-button" type="submit">保存到本次会话</button>
+                <button class="secondary-button" type="button" id="clearLlmKeyButton">清除</button>
+              </div>
+              <small>Key 仅保存到当前标签页，不写入系统配置和对话记录。</small>
+            </form>
+          </details>
+          <div class="messages" id="messages" aria-live="polite"><article class="message assistant"><div class="bubble">你好！我可以查询股票行情，并结合新闻和财报回答问题。试试问我：<br />“查询贵州茅台最近一个月的行情”</div></article></div>
           <form class="chat-form" id="chatForm"><textarea id="questionInput" name="question" rows="3" placeholder="例如：600519.SH 最近一个月涨跌如何？" required></textarea><button class="primary-button" type="submit" id="sendButton">发送</button></form>
         </section>
 
       </section>
 
       <section class="page-view research-page" id="researchPage" aria-label="新闻和财报" hidden>
-        <section class="news-panel panel" aria-label="Lakehouse news">
-          <div class="section-heading"><div><p class="eyebrow">LAKEHOUSE NEWS</p><h2>已入湖新闻</h2></div><button class="icon-button" type="button" id="refreshNewsButton" title="刷新新闻">↻</button></div>
+        <section class="news-panel panel" aria-label="财经新闻">
+          <div class="section-heading"><div><p class="eyebrow">MARKET NEWS</p><h2>最新财经新闻</h2></div><button class="icon-button" type="button" id="refreshNewsButton" title="刷新新闻">↻</button></div>
           <div class="news-meta"><span id="newsSummary">加载中…</span><label>每页<select id="pageSizeSelect"><option value="10">10</option><option value="20" selected>20</option><option value="50">50</option></select></label></div>
           <div class="news-list" id="newsList"></div>
           <footer class="pager"><button class="secondary-button" type="button" id="prevPageButton">上一页</button><span id="pageInfo">第 1 页</span><button class="secondary-button" type="button" id="nextPageButton">下一页</button></footer>
         </section>
         <section class="reports-panel panel" aria-label="上市公司年报">
-          <div class="section-heading"><div><p class="eyebrow">CNINFO REPORTS</p><h2>上市公司年报</h2></div><button class="icon-button" type="button" id="refreshReportsButton" title="刷新财报">↻</button></div>
+          <div class="section-heading"><div><p class="eyebrow">ANNUAL REPORTS</p><h2>上市公司年报</h2></div><button class="icon-button" type="button" id="refreshReportsButton" title="刷新财报">↻</button></div>
           <form class="report-filters" id="reportFilterForm">
             <label class="field">证券代码<input id="reportStockCode" name="stock_code" maxlength="16" placeholder="全部证券" /></label>
             <label class="field">报告年度<select id="reportYear" name="report_year"><option value="">全部年度</option></select></label>
@@ -104,7 +129,7 @@
             <label class="field">量能倍数<input id="volumeRatioThreshold" name="volume_ratio" type="number" min="1" max="20" step="0.1" value="1.8" required /></label>
             <button class="primary-button" type="submit">加入清单</button>
           </form>
-          <div class="monitor-message" id="watchlistMessage" role="status">从已进入证券主数据的 A 股中选择监护标的。</div>
+          <div class="monitor-message" id="watchlistMessage" role="status">选择需要持续关注的 A 股证券。</div>
           <div class="watchlist-list" id="watchlistList"></div>
         </section>
 

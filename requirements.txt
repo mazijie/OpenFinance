@@ -2,11 +2,13 @@ fastapi
 uvicorn[standard]
 pydantic
 pydantic-settings
-langgraph
+langgraph>=1.2.12,<2
+langgraph-checkpoint-postgres
 langchain
 langchain-openai
 yfinance
 httpx
+beautifulsoup4>=4.12,<5
 minio
 pyiceberg[sql-postgres,pyiceberg-core]
 pyarrow
@@ -20,3 +22,6 @@ pytest-asyncio
 pgvector
 baostock
 PyMuPDF
+pdfplumber
+trafilatura
+ray[default]

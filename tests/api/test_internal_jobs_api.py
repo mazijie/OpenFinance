@@ -20,6 +20,60 @@ def test_internal_ingest_requires_token(monkeypatch) -> None:
     assert response.status_code == 403
 
 
+def test_annual_report_bronze_manifest_listing_filters_and_verifies_pdf(monkeypatch) -> None:
+    from backend.config import settings
+
+    paths = [
+        "reports/provider=cninfo/stock=600519/report_year=2024/announcement_id=1/metadata.json",
+        "reports/provider=cninfo/stock=000001/report_year=2024/announcement_id=2/metadata.json",
+        "reports/provider=cninfo/stock=600519/report_year=2023/announcement_id=3/metadata.json",
+    ]
+    payloads = {
+        path: {
+            "ingested_at": "2026-10-27T00:00:00+00:00",
+            "announcement": {
+                "announcement_id": path.split("announcement_id=")[1].split("/")[0],
+                "stock_code": "600519" if "600519" in path else "000001",
+                "exchange": "SH" if "600519" in path else "SZ",
+                "report_year": 2023 if "report_year=2023" in path else 2024,
+                "title": "Annual report",
+                "announcement_time": "2025-04-02T16:00:00+00:00",
+                "pdf_url": "https://example.test/report.pdf",
+            },
+            "pdf_sha256": "a" * 64,
+            "pdf_size": 10,
+            "pdf_object_path": path.removesuffix("metadata.json") + "report.pdf",
+        }
+        for path in paths
+    }
+
+    class FakeBronzeWriter:
+        verified: list[str] = []
+
+        def list_objects(self, *, prefix: str) -> list[str]:
+            assert prefix == "reports/provider=cninfo/"
+            return paths
+
+        def read_json(self, path: str) -> dict[str, object]:
+            return payloads[path]
+
+        def object_exists(self, path: str) -> bool:
+            self.verified.append(path)
+            return True
+
+    monkeypatch.setattr("backend.ingestion.writers.bronze_writer.BronzeWriter", FakeBronzeWriter)
+    monkeypatch.setattr(settings, "OPENFINANCE_INTERNAL_API_TOKEN", "internal-token")
+    response = TestClient(app).post(
+        "/internal/jobs/annual-reports-bronze-manifests",
+        headers={"X-OpenFinance-Token": "internal-token"},
+        json={"years": [2024], "stocks": ["600519.SH"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [paths[0]]
+    assert FakeBronzeWriter.verified == [payloads[paths[0]]["pdf_object_path"]]
+
+
 def test_internal_a_share_universe_requires_token(monkeypatch) -> None:
     from backend.config import settings
 

@@ -23,6 +23,7 @@ from backend.config import settings
 from backend.logging_utils import get_logger
 from backend.schemas.rag import RagChunkRecord, RagSearchHit
 from backend.utils.time import day_end_utc, day_start_utc
+from backend.rag.vector_schema import ensure_vector_dimension
 
 logger = get_logger(__name__)
 
@@ -54,6 +55,14 @@ class PgVectorNewsStore:
         with self._connection() as conn, conn.cursor() as cur:
             cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
             cur.execute(f"CREATE SCHEMA IF NOT EXISTS {self.schema}")
+            ensure_vector_dimension(
+                cur,
+                schema=self.schema,
+                table=self.table,
+                dimension=self.dimension,
+                create_table_sql=self._create_table_sql,
+                error_type=RagStoreError,
+            )
             cur.execute(self._create_table_sql())
             cur.execute(self._create_index_sql())
         logger.info("RAG vector schema ensured", extra={"schema": self.schema, "table": self.table})

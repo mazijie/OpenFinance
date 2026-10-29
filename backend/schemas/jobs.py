@@ -6,6 +6,8 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
+from backend.schemas.annual_report import AnnualReportParseResult
+
 
 class IngestFinanceNewsRequest(BaseModel):
     """Payload for triggering finance news ingestion."""
@@ -45,6 +47,9 @@ class AShareUniverseCoverageRequest(BaseModel):
 
 
 class AShareGapPlanRequest(BaseModel):
+    start_date: date | None = None
+    symbols: list[str] | None = None
+    mode: str = "daily"
     adjustment_type: str = Field(default="qfq")
     lookback_days: int | None = Field(default=None, ge=1, le=3660)
     end_date: date | None = None
@@ -61,3 +66,48 @@ class IngestAnnualReportsRequest(BaseModel):
 
     stocks: list[str] = Field(default_factory=list)
     years: list[int] = Field(default_factory=list)
+
+
+class AnnualReportBronzeManifestRequest(BaseModel):
+    """Select existing Bronze annual-report manifests for replay."""
+
+    stocks: list[str] = Field(default_factory=list)
+    years: list[int] = Field(min_length=1)
+
+
+class AnnualReportParseRequest(BaseModel):
+    """Request one or more Bronze manifests for parser-service processing."""
+
+    manifest_paths: list[str] = Field(min_length=1)
+    force: bool = False
+
+
+class AnnualReportRaySubmitRequest(BaseModel):
+    """Submit an existing Bronze manifest batch to the shared Ray cluster."""
+
+    manifest_paths: list[str] = Field(min_length=1)
+    force: bool = False
+
+
+class AnnualReportRayJobResponse(BaseModel):
+    """Ray job identifier returned to Airflow."""
+
+    job_id: str = Field(min_length=1)
+    status: str = Field(min_length=1)
+
+
+class AnnualReportIRToSilverRequest(BaseModel):
+    """Parser responses to materialize into Iceberg Silver."""
+
+    parse_results: list[AnnualReportParseResult] = Field(min_length=1)
+
+
+class AnnualReportRecoveryPlanRequest(BaseModel):
+    report_ids: list[str] = Field(default_factory=list)
+
+
+class AnnualReportRecoverOneRequest(BaseModel):
+    manifest_path: str = Field(min_length=1)
+    report_id: str = Field(min_length=1)
+    pdf_sha256: str = Field(min_length=64, max_length=64)
+    pending_stages: list[str] = Field(min_length=1)

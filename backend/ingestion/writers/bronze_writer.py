@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import json
 import hashlib
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -18,6 +18,9 @@ except ImportError:  # pragma: no cover - test fallback
     S3Error = Exception
 
 from backend.config import settings
+
+
+UTC = timezone.utc
 from backend.logging_utils import get_logger
 from backend.schemas.finance import FinanceBronzeObject
 from backend.schemas.annual_report import AnnualReportAnnouncement, AnnualReportBronzeObject
@@ -146,6 +149,24 @@ class BronzeWriter:
                 response.release_conn()
         except (S3Error, MinioException) as exc:
             raise BronzeWriterError(f"Failed to read bronze binary object: {exc}") from exc
+
+    def object_exists(self, object_path: str) -> bool:
+        """Check Bronze object presence without reading its payload."""
+
+        try:
+            self.client.stat_object(self.bucket_name, object_path)
+            return True
+        except S3Error as exc:
+            if getattr(exc, "code", None) in {"NoSuchKey", "NoSuchObject", "NoSuchBucket"}:
+                return False
+            raise BronzeWriterError(f"Failed to stat bronze object: {exc}") from exc
+        except MinioException as exc:
+            raise BronzeWriterError(f"Failed to stat bronze object: {exc}") from exc
+
+    def object_sha256(self, object_path: str) -> str:
+        """Read and checksum a Bronze object before reusing its manifest."""
+
+        return hashlib.sha256(self.read_bytes(object_path)).hexdigest()
 
     def presigned_get_url(self, object_path: str, expires_seconds: int = 900) -> str:
         """Return a short-lived URL for user-facing binary access."""

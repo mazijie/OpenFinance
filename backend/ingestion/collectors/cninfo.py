@@ -37,9 +37,9 @@ class CNInfoCollector:
         report_year: int,
         page_size: int = 30,
     ) -> list[AnnualReportAnnouncement]:
-        code, exchange = self._normalize_stock(stock_code)
+        code, exchange, explicit_org_id = self._normalize_stock(stock_code)
         column = {"SH": "sse", "SZ": "szse", "BJ": "bj"}[exchange]
-        org_id = self._org_id(code, exchange)
+        org_id = self._org_id(code, exchange, explicit_org_id)
         params = {
             "stock": f"{code},{org_id}",
             "tabName": "fulltext",
@@ -133,22 +133,27 @@ class CNInfoCollector:
         return "摘要" not in title and "英文版" not in title and "英文" not in title
 
     @staticmethod
-    def _org_id(code: str, exchange: str) -> str:
+    def _org_id(code: str, exchange: str, explicit_org_id: str | None = None) -> str:
+        if explicit_org_id:
+            return explicit_org_id
         if exchange == "SH":
             return f"gssh0{code}"
         if exchange == "SZ":
             return f"gssz{code}"
-        raise CNInfoCollectorError("BJ orgId requires a security-master mapping")
+        raise CNInfoCollectorError("BJ orgId requires a security-master mapping; use CODE.BJ:ORG_ID")
 
     @staticmethod
-    def _normalize_stock(stock_code: str) -> tuple[str, str]:
-        value = stock_code.strip().upper()
+    def _normalize_stock(stock_code: str) -> tuple[str, str, str | None]:
+        raw_value = stock_code.strip()
+        value, separator, raw_org_id = raw_value.partition(":")
+        explicit_org_id = raw_org_id.strip().lower() if separator and raw_org_id.strip() else None
+        value = value.upper()
         if "." in value:
             code, exchange = value.split(".", 1)
             if exchange not in {"SH", "SZ", "BJ"}:
                 raise CNInfoCollectorError(f"Unsupported exchange: {exchange}")
-            return code.zfill(6), exchange
+            return code.zfill(6), exchange, explicit_org_id
         if not value.isdigit() or len(value) != 6:
             raise CNInfoCollectorError("stock_code must be a six-digit code or CODE.SH/CODE.SZ/CODE.BJ")
         exchange = "SH" if value.startswith(("5", "6", "68")) else "SZ"
-        return value, exchange
+        return value, exchange, explicit_org_id

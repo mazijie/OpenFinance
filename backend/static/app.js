@@ -4,6 +4,12 @@ const sendButton = document.querySelector("#sendButton");
 const messages = document.querySelector("#messages");
 const chatStatus = document.querySelector("#chatStatus");
 const systemStatus = document.querySelector("#systemStatus");
+const chatThreadTabs = document.querySelector("#chatThreadTabs");
+const newChatThreadButton = document.querySelector("#newChatThreadButton");
+let chatProgress = null;
+let chatProgressTitle = null;
+let chatProgressList = null;
+let chatElapsed = null;
 
 const marketForm = document.querySelector("#marketForm");
 const symbolInput = document.querySelector("#symbolInput");
@@ -52,6 +58,31 @@ const monitorTradingDate = document.querySelector("#monitorTradingDate");
 const monitorStatus = document.querySelector("#monitorStatus");
 const monitorMessage = document.querySelector("#monitorMessage");
 const monitorReportList = document.querySelector("#monitorReportList");
+const newAgentThreadButton = document.querySelector("#newAgentThreadButton");
+const agentThreadList = document.querySelector("#agentThreadList");
+const agentThreadTitle = document.querySelector("#agentThreadTitle");
+const agentRunStatus = document.querySelector("#agentRunStatus");
+const cancelAgentTurnButton = document.querySelector("#cancelAgentTurnButton");
+const agentToolTimeline = document.querySelector("#agentToolTimeline");
+const agentMessages = document.querySelector("#agentMessages");
+const agentComposer = document.querySelector("#agentComposer");
+const agentQuestion = document.querySelector("#agentQuestion");
+const agentSendButton = document.querySelector("#agentSendButton");
+const deepResearchMode = document.querySelector("#deepResearchMode");
+const inspectorContent = document.querySelector("#inspectorContent");
+const refreshInspectorButton = document.querySelector("#refreshInspectorButton");
+const manageWebDomainsButton = document.querySelector("#manageWebDomainsButton");
+const modelSettingsDetails = document.querySelector("#modelSettingsDetails");
+const modelSettingsForm = document.querySelector("#modelSettingsForm");
+const llmApiKeyInput = document.querySelector("#llmApiKey");
+const llmModelSelect = document.querySelector("#llmModel");
+const modelSettingsStatus = document.querySelector("#modelSettingsStatus");
+const clearLlmKeyButton = document.querySelector("#clearLlmKeyButton");
+
+const LLM_KEY_STORAGE = "openfinance.llmApiKey";
+const LLM_MODEL_STORAGE = "openfinance.llmModel";
+const CHAT_THREAD_STORAGE = "openfinance.chatThreadId";
+const DEFAULT_LLM_MODEL = "deepseek-flash";
 
 const state = {
   newsPage: 1,
@@ -61,6 +92,15 @@ const state = {
   marketRequestId: 0,
   marketAbortController: null,
   chart: null,
+  agentThreads: [],
+  agentThreadId: null,
+  agentTurnId: null,
+  agentStreaming: false,
+  chatThreads: [],
+  chatThreadId: null,
+  chatStreaming: false,
+  chatStartedAt: null,
+  chatProgressTimer: null,
 };
 
 async function loadSecurityOptions() {
@@ -129,6 +169,294 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function sessionValue(key) {
+  try {
+    return window.sessionStorage.getItem(key) || "";
+  } catch {
+    return "";
+  }
+}
+
+function setSessionValue(key, value) {
+  try {
+    if (value) window.sessionStorage.setItem(key, value);
+    else window.sessionStorage.removeItem(key);
+  } catch {
+    /* Private browsing can disable storage; the in-memory form still works. */
+  }
+}
+
+function getLlmConfig() {
+  return {
+    apiKey: llmApiKeyInput.value.trim(),
+    model: llmModelSelect.value || DEFAULT_LLM_MODEL,
+  };
+}
+
+function requireLlmConfig() {
+  const config = getLlmConfig();
+  if (!config.apiKey) {
+    if (modelSettingsDetails) modelSettingsDetails.open = true;
+    window.setTimeout(() => llmApiKeyInput.focus(), 0);
+    throw new Error("请先在左侧填写 DeepSeek API Key。");
+  }
+  return config;
+}
+
+function llmHeaders(extra = {}) {
+  const config = requireLlmConfig();
+  return {
+    ...extra,
+    "X-LLM-API-Key": config.apiKey,
+    "X-LLM-Model": config.model,
+  };
+}
+
+function renderLlmSettingsStatus() {
+  const config = getLlmConfig();
+  const ready = Boolean(config.apiKey);
+  modelSettingsStatus.textContent = ready ? `已配置 · ${config.model}` : "未配置 Key";
+  modelSettingsStatus.classList.toggle("ready", ready);
+}
+
+function loadLlmSettings() {
+  llmApiKeyInput.value = sessionValue(LLM_KEY_STORAGE);
+  const savedModel = sessionValue(LLM_MODEL_STORAGE);
+  if ([...llmModelSelect.options].some((option) => option.value === savedModel)) {
+    llmModelSelect.value = savedModel;
+  }
+  renderLlmSettingsStatus();
+}
+
+async function apiJson(url, options = {}) {
+  const response = await fetch(url, options);
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.detail || `请求失败（${response.status}）`);
+  return payload;
+}
+
+async function loadAgentThreads(preferredThreadId = null) {
+  const items = await apiJson("/api/agent/threads");
+  if (!items.length) {
+    const thread = await apiJson("/api/agent/threads", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+    state.agentThreads = [thread];
+  } else {
+    state.agentThreads = items;
+  }
+  const resolvedId = preferredThreadId || state.agentThreadId || state.agentThreads[0]?.thread_id;
+  renderAgentThreads();
+  if (resolvedId) await selectAgentThread(resolvedId);
+}
+
+function renderAgentThreads() {
+  agentThreadList.innerHTML = state.agentThreads.map((thread) => `
+    <article class="agent-thread-row" data-thread-id="${escapeHtml(thread.thread_id)}">
+      <button class="agent-thread-item ${thread.thread_id === state.agentThreadId ? "active" : ""}" type="button" data-action="open">
+        <strong>${escapeHtml(thread.title)}</strong>
+        <span>${escapeHtml(formatDateTime(thread.last_message_at || thread.updated_at))}${thread.unread_count ? ` · ${thread.unread_count} 条未读` : ""}</span>
+      </button>
+      <button type="button" data-action="archive" title="归档线程">×</button>
+    </article>`).join("");
+}
+
+async function selectAgentThread(threadId) {
+  state.agentThreadId = threadId;
+  const thread = state.agentThreads.find((item) => item.thread_id === threadId);
+  agentThreadTitle.textContent = thread?.title || "研究对话";
+  renderAgentThreads();
+  await loadAgentMessages();
+}
+
+function renderAgentMessage(message) {
+  const citations = message.citations || [];
+  const report = message.kind === "monitor_report" ? message.payload?.report : null;
+  const approval = message.kind === "approval" ? message.payload?.approval : null;
+  const reportHtml = report ? `<div class="agent-monitor-card"><strong>${escapeHtml(report.symbol || "")} ${escapeHtml(report.name || "")} 监测报告</strong><p>${escapeHtml(report.analysis || "无分析文本")}</p><button type="button" class="secondary-button" data-action="open-monitor-dashboard">查看监测仪表盘</button></div>` : "";
+  const approvalActions = !approval?.status || approval.status === "pending" ? '<div class="approval-actions"><button type="button" class="primary-button" data-decision="approve">批准</button><button type="button" class="secondary-button" data-decision="reject">拒绝</button></div>' : "";
+  const approvalHtml = approval ? `<div class="approval-card" data-approval-id="${escapeHtml(approval.approval_id)}"><h4>需要确认：${escapeHtml(approval.tool_name)}</h4><p>${escapeHtml(approval.summary || JSON.stringify(approval.args || {}))}</p>${approvalActions}</div>` : "";
+  const citationHtml = citations.length ? `<details class="agent-citations"><summary>来源与引用（${citations.length}）</summary><ol>${citations.map((citation) => `<li>[${citation.citation_id}] ${citation.url ? `<a href="${escapeHtml(citation.url)}" target="_blank" rel="noreferrer">${escapeHtml(citation.title)}</a>` : escapeHtml(citation.title)}${citation.locator ? ` · ${escapeHtml(citation.locator)}` : ""}</li>`).join("")}</ol></details>` : "";
+  return `<article class="agent-message ${escapeHtml(message.role)} ${escapeHtml(message.kind)}"><div class="agent-bubble">${escapeHtml(message.content)}${reportHtml}${approvalHtml}${citationHtml}</div></article>`;
+}
+
+async function loadAgentMessages() {
+  if (!state.agentThreadId) return;
+  try {
+    const items = await apiJson(`/api/agent/threads/${encodeURIComponent(state.agentThreadId)}/messages`);
+    agentMessages.innerHTML = items.length
+      ? items.map(renderAgentMessage).join("")
+      : '<div class="empty-state">开始一段研究对话。Agent 会按需调用行情、新闻、年报和白名单网页。</div>';
+    agentMessages.scrollTop = agentMessages.scrollHeight;
+    const latestTurn = items.filter((item) => item.turn_id).at(-1)?.turn_id;
+    if (latestTurn) loadInspector(latestTurn);
+  } catch (error) {
+    agentMessages.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function setAgentActivity(text, kind = "running") {
+  const item = document.createElement("span");
+  item.className = `agent-tool-item ${kind}`;
+  item.textContent = text;
+  agentToolTimeline.appendChild(item);
+  return item;
+}
+
+function appendAgentApproval(payload) {
+  const card = document.createElement("article");
+  card.className = "approval-card";
+  card.dataset.approvalId = payload.approval_id;
+  card.innerHTML = `<h4>需要确认：${escapeHtml(payload.tool_name)}</h4><p>${escapeHtml(payload.summary || JSON.stringify(payload.args || {}))}</p><div class="approval-actions"><button type="button" class="primary-button" data-decision="approve">批准</button><button type="button" class="secondary-button" data-decision="reject">拒绝</button></div>`;
+  agentMessages.appendChild(card);
+  agentMessages.scrollTop = agentMessages.scrollHeight;
+}
+
+async function submitApproval(approvalId, approved, card) {
+  if (!state.agentThreadId) return;
+  const buttons = card.querySelectorAll("button");
+  buttons.forEach((button) => { button.disabled = true; });
+  let headers;
+  try {
+    headers = llmHeaders({ "Content-Type": "application/json" });
+  } catch (error) {
+    addAgentSystemMessage(error.message);
+    buttons.forEach((button) => { button.disabled = false; });
+    return;
+  }
+  const response = await fetch(`/api/agent/threads/${encodeURIComponent(state.agentThreadId)}/approvals/${encodeURIComponent(approvalId)}`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ approved }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    addAgentSystemMessage(error.detail || "审批失败");
+    buttons.forEach((button) => { button.disabled = false; });
+    return;
+  }
+  card.remove();
+  await consumeAgentEvents(response, true);
+}
+
+function addAgentSystemMessage(text) {
+  const article = document.createElement("article");
+  article.className = "agent-message system";
+  article.innerHTML = `<div class="agent-bubble">${escapeHtml(text)}</div>`;
+  agentMessages.appendChild(article);
+  agentMessages.scrollTop = agentMessages.scrollHeight;
+}
+
+async function parseSSEStream(response, onEvent) {
+  if (!response.body) throw new Error("浏览器不支持流式响应");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let boundary;
+    while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+      const block = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      const data = block.split("\n").filter((line) => line.startsWith("data:" )).map((line) => line.slice(5).trim()).join("\n");
+      if (data) {
+        try { onEvent(JSON.parse(data)); } catch { /* Ignore incomplete non-JSON frames. */ }
+      }
+    }
+  }
+}
+
+async function consumeAgentEvents(response, resume = false) {
+  state.agentStreaming = true;
+  agentSendButton.disabled = true;
+  cancelAgentTurnButton.hidden = false;
+  agentRunStatus.textContent = resume ? "继续研究" : "研究中";
+  agentRunStatus.classList.add("busy");
+  let streamingBubble = null;
+  const toolItems = new Map();
+  await parseSSEStream(response, (event) => {
+    const type = event.event_type;
+    const payload = event.payload || {};
+    if (type === "turn.started") {
+      state.agentTurnId = payload.turn_id;
+      const article = document.createElement("article");
+      article.className = "agent-message assistant streaming";
+      article.innerHTML = '<div class="agent-bubble"></div>';
+      agentMessages.appendChild(article);
+      streamingBubble = article.querySelector(".agent-bubble");
+    } else if (type === "tool.started") {
+      const item = setAgentActivity(`调用 ${payload.tool_name}`, "running");
+      toolItems.set(payload.call_id, item);
+    } else if (type === "tool.completed") {
+      const item = toolItems.get(payload.call_id);
+      if (item) {
+        item.className = `agent-tool-item ${payload.error ? "error" : "done"}`;
+        item.textContent = `${payload.tool_name}${payload.error ? " 失败" : ` · ${payload.duration_ms || 0}ms`}`;
+      }
+    } else if (type === "approval.required") {
+      window.setTimeout(() => appendAgentApproval(payload), 0);
+      agentRunStatus.textContent = "等待确认";
+    } else if (type === "message.delta" && streamingBubble) {
+      streamingBubble.textContent += payload.text || "";
+      agentMessages.scrollTop = agentMessages.scrollHeight;
+    } else if (type === "message.completed" && streamingBubble) {
+      streamingBubble.parentElement?.classList.remove("streaming");
+    } else if (type === "monitor.queued") {
+      setAgentActivity("监测任务已提交", "done");
+    } else if (type === "turn.failed") {
+      addAgentSystemMessage(payload.error || "Agent 运行失败");
+    } else if (type === "turn.cancelled") {
+      addAgentSystemMessage("本轮研究已停止");
+    }
+  });
+  state.agentStreaming = false;
+  agentSendButton.disabled = false;
+  cancelAgentTurnButton.hidden = true;
+  agentRunStatus.classList.remove("busy");
+  agentRunStatus.textContent = "就绪";
+  await loadAgentThreads(state.agentThreadId);
+}
+
+async function submitAgentTurn(question) {
+  if (!state.agentThreadId) throw new Error("请先选择研究线程");
+  const headers = llmHeaders({ "Content-Type": "application/json" });
+  const response = await fetch(`/api/agent/threads/${encodeURIComponent(state.agentThreadId)}/turns`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ question, mode: deepResearchMode.checked ? "deep" : "standard" }),
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.detail || "研究请求失败");
+  }
+  agentMessages.insertAdjacentHTML("beforeend", renderAgentMessage({ role: "user", kind: "text", content: question, citations: [], payload: {} }));
+  agentMessages.scrollTop = agentMessages.scrollHeight;
+  await consumeAgentEvents(response);
+}
+
+async function loadInspector(turnId = state.agentTurnId) {
+  if (!turnId) return;
+  try {
+    const detail = await apiJson(`/api/agent/runs/${encodeURIComponent(turnId)}`);
+    const toolCalls = detail.tool_calls || [];
+    inspectorContent.innerHTML = `
+      <section class="inspector-section"><h4>本轮状态</h4>
+        <div class="inspector-row"><span>模式</span><strong>${escapeHtml(detail.turn.mode)}</strong></div>
+        <div class="inspector-row"><span>状态</span><strong>${escapeHtml(detail.turn.status)}</strong></div>
+        <div class="inspector-row"><span>检查点</span><strong>${escapeHtml(detail.turn.checkpoint_id || "运行中")}</strong></div>
+        <div class="inspector-row"><span>工具调用</span><strong>${escapeHtml(String(detail.turn.stats?.tool_calls_used || toolCalls.length))}</strong></div>
+      </section>
+      <section class="inspector-section"><h4>工具调用</h4>
+        ${toolCalls.length ? toolCalls.map((call) => `<div class="inspector-row"><span>${escapeHtml(call.tool_name)}</span><strong>${escapeHtml(call.status)}</strong></div>`).join("") : '<div class="muted">本轮尚未调用工具</div>'}
+      </section>
+      <section class="inspector-section"><h4>审批</h4>
+        ${(detail.approvals || []).length ? detail.approvals.map((approval) => `<div class="inspector-row"><span>${escapeHtml(approval.tool_name)}</span><strong>${escapeHtml(approval.status)}</strong></div>`).join("") : '<div class="muted">无审批操作</div>'}
+      </section>`;
+  } catch (error) {
+    inspectorContent.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
+  }
+}
+
 function setMarketMessage(message, kind = "info") {
   marketMessage.textContent = message;
   marketMessage.className = `market-message ${kind}`;
@@ -141,8 +469,8 @@ function setMonitorMessage(element, message, kind = "info") {
 
 function setLoading(isLoading) {
   if (isLoading) {
-    marketSourceBadge.textContent = "读取湖仓";
-    setMarketMessage("正在读取 Silver/Gold 行情数据…", "info");
+    marketSourceBadge.textContent = "正在查询";
+    setMarketMessage("正在获取最新行情数据…", "info");
   }
 }
 
@@ -159,14 +487,15 @@ function renderStats(summary) {
 
 function renderLineage(summary, bars) {
   const latest = bars[bars.length - 1] || {};
-  const first = bars[0] || {};
+  const adjustmentLabels = { qfq: "前复权", hfq: "后复权", none: "不复权" };
+  const latestDate = summary.recent_trading_date || latest.trading_date;
+  const updateTime = latest.available_at || latest.ingested_at;
   marketSourceBadge.textContent = `${summary.symbol} · ${summary.exchange}`;
   lineageStrip.innerHTML = `
-    <div><span>数据来源</span><strong>${escapeHtml(latest.provider || "内部湖仓")}</strong></div>
-    <div><span>复权口径</span><strong>${escapeHtml(summary.adjustment_type || "—")}</strong></div>
-    <div><span>可用时间</span><strong>${escapeHtml(formatDateTime(latest.available_at))}</strong></div>
-    <div><span>写入时间</span><strong>${escapeHtml(formatDateTime(latest.ingested_at))}</strong></div>
-    <div class="lineage-path"><span>Bronze 原始对象</span><strong title="${escapeHtml(first.raw_object_path || latest.raw_object_path || "—")}">${escapeHtml(first.raw_object_path || latest.raw_object_path || "—")}</strong></div>`;
+    <div><span>最新交易日</span><strong>${escapeHtml(latestDate ? formatDate(latestDate) : "—")}</strong></div>
+    <div><span>复权方式</span><strong>${escapeHtml(adjustmentLabels[summary.adjustment_type] || "不复权")}</strong></div>
+    <div><span>数据更新</span><strong>${escapeHtml(updateTime ? formatDateTime(updateTime) : "—")}</strong></div>
+    <div><span>数据状态</span><strong>${escapeHtml(summary.data_gap_note ? "部分数据缺失" : "数据完整")}</strong></div>`;
 }
 
 function renderBarsTable(bars) {
@@ -248,11 +577,11 @@ async function loadMarket() {
     if (!summary) {
       clearMarket();
       marketSourceBadge.textContent = "暂无数据";
-      setMarketMessage(payload.message || "湖仓中暂无符合条件的行情数据。", "warning");
+      setMarketMessage(payload.message || "当前条件下暂无行情数据。", "warning");
       return;
     }
     renderMarketSummary(summary);
-    setMarketMessage(summary.adjustment_note || "数据来自内部 Silver/Gold 湖仓。", "success");
+    setMarketMessage("行情数据已更新，可在图表和明细中查看。", "success");
   } catch (error) {
     if (error.name === "AbortError") return;
     clearMarket();
@@ -284,25 +613,551 @@ function addMessage(role, text, toolResults = null) {
   messages.scrollTop = messages.scrollHeight;
 }
 
-async function sendQuestion(question) {
-  chatStatus.textContent = "思考中";
-  chatStatus.classList.add("busy");
-  sendButton.disabled = true;
+function titleFromQuestion(question) {
+  const normalized = String(question || "").trim().replace(/\s+/g, " ");
+  return normalized.length > 24 ? `${normalized.slice(0, 24)}…` : normalized || "新对话";
+}
+
+function activeChatThread() {
+  return state.chatThreads.find((thread) => thread.thread_id === state.chatThreadId) || null;
+}
+
+function renderChatThreadTabs() {
+  if (!chatThreadTabs) return;
+  chatThreadTabs.innerHTML = state.chatThreads.map((thread) => `
+    <div class="chat-thread-tab ${thread.thread_id === state.chatThreadId ? "active" : ""}" role="presentation">
+      <button type="button" role="tab" aria-selected="${thread.thread_id === state.chatThreadId}" data-chat-thread="${escapeHtml(thread.thread_id)}" title="${escapeHtml(thread.title)}（双击重命名）">${escapeHtml(thread.title)}</button>
+      <button type="button" class="chat-thread-close" data-archive-chat="${escapeHtml(thread.thread_id)}" title="归档对话">×</button>
+    </div>
+  `).join("");
+  chatThreadTabs.querySelector(".chat-thread-tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+function formatEventDuration(events) {
+  if (!events?.length) return "";
+  const first = new Date(events[0].created_at || 0).getTime();
+  const last = new Date(events.at(-1).created_at || 0).getTime();
+  if (!Number.isFinite(first) || !Number.isFinite(last) || last < first) return "";
+  const seconds = (last - first) / 1000;
+  return seconds < 10 ? `${seconds.toFixed(1)}s` : `${Math.round(seconds)}s`;
+}
+
+function buildHistoricalProgress(events) {
+  if (!events?.length) return null;
+  const toolEvents = events.filter((event) => event.event_type === "tool.completed");
+  const terminal = [...events].reverse().find((event) => ["turn.completed", "turn.failed", "turn.cancelled"].includes(event.event_type));
+  const budget = events.find((event) => event.event_type === "step.completed" && event.payload?.status === "budget_exhausted");
+  const article = document.createElement("article");
+  article.className = "message progress";
+  const details = document.createElement("details");
+  details.className = "chat-progress completed";
+  const summary = document.createElement("summary");
+  summary.className = "chat-progress-heading";
+  const title = document.createElement("strong");
+  title.textContent = terminal?.event_type === "turn.failed"
+    ? "运行记录 · 失败"
+    : terminal?.event_type === "turn.cancelled"
+      ? "运行记录 · 已停止"
+      : `运行记录 · ${toolEvents.length} 次工具调用`;
+  const meta = document.createElement("span");
+  meta.textContent = formatEventDuration(events);
+  summary.append(title, meta);
+  const list = document.createElement("ol");
+  if (toolEvents.length) {
+    toolEvents.forEach((event) => {
+      const payload = event.payload || {};
+      const item = document.createElement("li");
+      item.className = payload.error ? "error" : "done";
+      const content = document.createElement("div");
+      const label = document.createElement("strong");
+      label.textContent = describeChatTool(payload).label;
+      content.appendChild(label);
+      if (payload.error) {
+        const note = document.createElement("small");
+        note.textContent = String(payload.error);
+        content.appendChild(note);
+      } else if (payload.duration_ms !== undefined) {
+        const note = document.createElement("small");
+        const sources = (payload.summary?.sources || []).map((source) => {
+          return { market: "行情", news: "新闻", annual_report: "年报", web: "网络公告" }[source] || source;
+        });
+        note.textContent = `完成${sources.length ? ` · ${sources.join("、")}` : ""} · ${payload.duration_ms}ms`;
+        content.appendChild(note);
+      }
+      item.appendChild(content);
+      list.appendChild(item);
+    });
+  } else {
+    const item = document.createElement("li");
+    item.className = "done";
+    const content = document.createElement("div");
+    const label = document.createElement("strong");
+    label.textContent = "模型完成了本轮分析";
+    content.appendChild(label);
+    item.appendChild(content);
+    list.appendChild(item);
+  }
+  if (budget) {
+    const item = document.createElement("li");
+    item.className = "done";
+    const content = document.createElement("div");
+    content.textContent = "检索结束后进入综合回答";
+    item.appendChild(content);
+    list.appendChild(item);
+  }
+  details.append(summary, list);
+  article.appendChild(details);
+  return article;
+}
+
+function renderChatHistory(history, events = []) {
+  messages.innerHTML = "";
+  if (!history.length) {
+    messages.innerHTML = '<div class="empty-state">这个对话还没有消息，直接提问即可。</div>';
+    return;
+  }
+  const eventsByTurn = new Map();
+  events.forEach((event) => {
+    if (!event.turn_id) return;
+    const items = eventsByTurn.get(event.turn_id) || [];
+    items.push(event);
+    eventsByTurn.set(event.turn_id, items);
+  });
+  const turnsWithProgress = new Set();
+  history.forEach((message) => {
+    if (message.kind === "text" && (message.role === "user" || message.role === "assistant")) {
+      addMessage(message.role, message.content);
+      const bubble = messages.lastElementChild?.querySelector(".bubble");
+      if (message.role === "user") {
+        const progress = buildHistoricalProgress(eventsByTurn.get(message.turn_id));
+        if (progress) messages.appendChild(progress);
+        if (message.turn_id) turnsWithProgress.add(message.turn_id);
+      }
+      appendChatCitations(bubble, message.citations || []);
+    } else if (message.kind === "system") {
+      addMessage("error", message.content);
+      if (message.turn_id) turnsWithProgress.add(message.turn_id);
+    }
+  });
+  eventsByTurn.forEach((turnEvents, turnId) => {
+    if (!turnsWithProgress.has(turnId)) {
+      const progress = buildHistoricalProgress(turnEvents);
+      if (progress) messages.appendChild(progress);
+    }
+  });
+  messages.scrollTop = messages.scrollHeight;
+}
+
+async function selectChatThread(threadId) {
+  if (state.chatStreaming && threadId !== state.chatThreadId) {
+    addMessage("error", "当前回答仍在运行，完成后再切换对话。");
+    return;
+  }
+  state.chatThreadId = threadId;
+  setSessionValue(CHAT_THREAD_STORAGE, threadId);
+  renderChatThreadTabs();
+  messages.innerHTML = '<div class="empty-state">正在读取聊天记录…</div>';
   try {
-    const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question }) });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.detail || `请求失败（${response.status}）`);
-    addMessage("assistant", payload.analysis || "没有返回分析结果。", payload.tool_results);
-    const marketData = payload.tool_results?.data;
-    if (marketData?.bars?.length) {
-      if ([...symbolInput.options].some((option) => option.value === marketData.symbol)) symbolInput.value = marketData.symbol;
-      renderMarketSummary(marketData);
-      setMarketMessage(marketData.adjustment_note || "行情结果已同步到图表。", "success");
+    const [history, events] = await Promise.all([
+      apiJson(`/api/agent/threads/${encodeURIComponent(threadId)}/messages?limit=200`),
+      apiJson(`/api/agent/threads/${encodeURIComponent(threadId)}/events`),
+    ]);
+    renderChatHistory(history, events);
+  } catch (error) {
+    messages.innerHTML = `<div class="empty-state">${escapeHtml(error.message || "聊天记录读取失败")}</div>`;
+  }
+}
+
+async function loadChatThreads(preferredThreadId = null) {
+  try {
+    const threads = (await apiJson("/api/agent/threads")).filter((thread) => thread.kind === "user");
+    state.chatThreads = threads;
+    if (!state.chatThreads.length) {
+      const created = await apiJson("/api/agent/threads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "新对话" }),
+      });
+      state.chatThreads = [created];
+    }
+    const remembered = sessionValue(CHAT_THREAD_STORAGE);
+    const resolved = [preferredThreadId, state.chatThreadId, remembered]
+      .find((candidate) => candidate && state.chatThreads.some((thread) => thread.thread_id === candidate))
+      || state.chatThreads[0].thread_id;
+    renderChatThreadTabs();
+    await selectChatThread(resolved);
+  } catch (error) {
+    messages.innerHTML = `<div class="empty-state">${escapeHtml(error.message || "聊天线程加载失败")}</div>`;
+  }
+}
+
+async function createChatThread() {
+  if (state.chatStreaming) {
+    addMessage("error", "当前回答仍在运行，完成后再新建对话。");
+    return;
+  }
+  try {
+    const thread = await apiJson("/api/agent/threads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "新对话" }),
+    });
+    state.chatThreads.unshift(thread);
+    await selectChatThread(thread.thread_id);
+    questionInput.focus();
+  } catch (error) {
+    addMessage("error", error.message || "新建对话失败");
+  }
+}
+
+async function renameChatThread(threadId) {
+  const thread = state.chatThreads.find((item) => item.thread_id === threadId);
+  if (!thread) return;
+  const title = window.prompt("对话名称", thread.title);
+  if (!title?.trim()) return;
+  try {
+    const updated = await apiJson(`/api/agent/threads/${encodeURIComponent(threadId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: title.trim().slice(0, 80) }),
+    });
+    Object.assign(thread, updated);
+    renderChatThreadTabs();
+  } catch (error) {
+    addMessage("error", error.message || "重命名失败");
+  }
+}
+
+async function archiveChatThread(threadId) {
+  if (state.chatStreaming) {
+    addMessage("error", "当前回答仍在运行，完成后再归档对话。");
+    return;
+  }
+  try {
+    await apiJson(`/api/agent/threads/${encodeURIComponent(threadId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "archived" }),
+    });
+    state.chatThreads = state.chatThreads.filter((thread) => thread.thread_id !== threadId);
+    if (!state.chatThreads.length) {
+      await loadChatThreads();
+    } else {
+      const nextId = state.chatThreadId === threadId ? state.chatThreads[0].thread_id : state.chatThreadId;
+      await loadChatThreads(nextId);
     }
   } catch (error) {
+    addMessage("error", error.message || "归档对话失败");
+  }
+}
+
+async function maybeRenameActiveChatThread(question) {
+  const thread = activeChatThread();
+  if (!thread || !["新对话", "新研究"].includes(thread.title)) return;
+  try {
+    const updated = await apiJson(`/api/agent/threads/${encodeURIComponent(thread.thread_id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: titleFromQuestion(question) }),
+    });
+    Object.assign(thread, updated);
+    renderChatThreadTabs();
+  } catch {
+    /* The conversation is already persisted; renaming is cosmetic. */
+  }
+}
+
+function formatChatElapsed() {
+  if (!state.chatStartedAt) return "0.0s";
+  const seconds = (performance.now() - state.chatStartedAt) / 1000;
+  return seconds < 10 ? `${seconds.toFixed(1)}s` : `${Math.floor(seconds)}s`;
+}
+
+function stopChatProgressTimer() {
+  if (state.chatProgressTimer) {
+    window.clearInterval(state.chatProgressTimer);
+    state.chatProgressTimer = null;
+  }
+}
+
+function startChatProgressTimer() {
+  stopChatProgressTimer();
+  state.chatStartedAt = performance.now();
+  if (chatElapsed) chatElapsed.textContent = "0.0s";
+  chatStatus.textContent = "运行中 · 0.0s";
+  state.chatProgressTimer = window.setInterval(() => {
+    const elapsed = formatChatElapsed();
+    if (chatElapsed) chatElapsed.textContent = elapsed;
+    chatStatus.textContent = `运行中 · ${elapsed}`;
+  }, 200);
+}
+
+function resetChatProgress() {
+  stopChatProgressTimer();
+  const article = document.createElement("article");
+  article.className = "message progress";
+  const details = document.createElement("details");
+  details.className = "chat-progress";
+  details.open = true;
+  const summary = document.createElement("summary");
+  summary.className = "chat-progress-heading";
+  const title = document.createElement("strong");
+  const meta = document.createElement("span");
+  const spinner = document.createElement("i");
+  spinner.className = "chat-progress-spinner";
+  const elapsed = document.createElement("time");
+  elapsed.textContent = "0.0s";
+  meta.append(spinner, elapsed);
+  summary.append(title, meta);
+  const list = document.createElement("ol");
+  details.append(summary, list);
+  article.appendChild(details);
+  messages.appendChild(article);
+  messages.scrollTop = messages.scrollHeight;
+  chatProgress = details;
+  chatProgressTitle = title;
+  chatProgressList = list;
+  chatElapsed = elapsed;
+  chatProgressTitle.textContent = "正在建立研究任务";
+  startChatProgressTimer();
+}
+
+function setChatProgressTitle(text) {
+  if (chatProgressTitle) chatProgressTitle.textContent = text;
+}
+
+function appendChatProgress(text, detail = "", kind = "running") {
+  if (!chatProgressList) return null;
+  const item = document.createElement("li");
+  item.className = kind;
+  const content = document.createElement("div");
+  const label = document.createElement("strong");
+  label.textContent = text;
+  content.appendChild(label);
+  if (detail) {
+    const note = document.createElement("small");
+    note.textContent = detail;
+    content.appendChild(note);
+  }
+  const time = document.createElement("time");
+  time.textContent = formatChatElapsed();
+  item.append(content, time);
+  chatProgressList.appendChild(item);
+  chatProgressList.scrollTop = chatProgressList.scrollHeight;
+  return item;
+}
+
+function collapseChatProgress() {
+  if (chatProgress) {
+    chatProgress.classList.add("completed");
+    chatProgress.open = false;
+  }
+}
+
+function finishChatProgressItem(item, detail = null, kind = "done") {
+  if (!item) return;
+  item.className = kind;
+  const time = item.querySelector("time");
+  if (time) time.textContent = formatChatElapsed();
+  if (detail) {
+    let note = item.querySelector("small");
+    if (!note) {
+      note = document.createElement("small");
+      item.querySelector("div")?.appendChild(note);
+    }
+    note.textContent = detail;
+  }
+}
+
+function describeChatTool(payload) {
+  const args = payload.args || {};
+  const sources = (args.sources || payload.summary?.sources || []).filter(Boolean);
+  const sourceLabels = { market: "行情", news: "新闻", annual_report: "年报", web: "网络公告" };
+  if (payload.tool_name === "research_search") {
+    const names = sources.map((source) => sourceLabels[source] || source).join("、");
+    return {
+    label: names ? `检索${names}资料` : "检索相关资料",
+      detail: args.query ? String(args.query) : "",
+    };
+  }
+  if (payload.tool_name === "resolve_security") {
+    return { label: "解析证券代码", detail: args.query ? String(args.query) : "" };
+  }
+  if (payload.tool_name === "list_watchlist") {
+    return { label: "读取监护清单", detail: "" };
+  }
+  return {
+    label: `执行工具 ${payload.tool_name || "未知"}`,
+    detail: "",
+  };
+}
+
+function appendChatCitations(bubble, citations) {
+  if (!bubble || !citations?.length || bubble.querySelector(".chat-citations")) return;
+  const details = document.createElement("details");
+  details.className = "chat-citations";
+  const summary = document.createElement("summary");
+  summary.textContent = `来源与引用（${citations.length}）`;
+  const list = document.createElement("ol");
+  citations.forEach((citation) => {
+    const item = document.createElement("li");
+    item.textContent = `[${citation.citation_id}] ${citation.title || citation.source_type || "证据"}`;
+    if (citation.locator) item.textContent += ` · ${citation.locator}`;
+    list.appendChild(item);
+  });
+  details.append(summary, list);
+  bubble.appendChild(details);
+}
+
+async function sendQuestion(question) {
+  if (!state.chatThreadId) await loadChatThreads();
+  state.chatStreaming = true;
+  resetChatProgress();
+  chatStatus.classList.add("busy");
+  sendButton.disabled = true;
+  let answerBubble = null;
+  let answerText = "";
+  let citations = [];
+  let streamError = null;
+  let terminalEvent = null;
+  let generatingItem = null;
+  const toolItems = new Map();
+  try {
+    const headers = llmHeaders({ "Content-Type": "application/json", "Accept": "text/event-stream" });
+    const requestStream = () => fetch("/api/chat/stream", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        question,
+        thread_id: state.chatThreadId,
+        mode: "standard",
+      }),
+    });
+    let response = await requestStream();
+    if (response.status === 409 && state.chatThreadId) {
+      state.chatThreadId = null;
+      response = await requestStream();
+    }
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.detail || `请求失败（${response.status}）`);
+    }
+    const connectedItem = appendChatProgress("研究任务已建立", "开始规划需要调用的数据和工具");
+    finishChatProgressItem(connectedItem);
+    setChatProgressTitle("模型正在规划研究步骤");
+    maybeRenameActiveChatThread(question);
+
+    await parseSSEStream(response, (event) => {
+      const type = event.event_type;
+      const payload = event.payload || {};
+      if (event.thread_id) state.chatThreadId = event.thread_id;
+      if (type === "turn.started") {
+        appendChatProgress(
+          "开始分析",
+          "正在判断任务类型并规划所需资料",
+        ).className = "done";
+      } else if (type === "step.completed") {
+        if (payload.status === "budget_exhausted") {
+          const item = appendChatProgress("检索已结束", "开始整理已有证据并生成结论", "done");
+          item.querySelector("time").textContent = formatChatElapsed();
+          setChatProgressTitle("正在整理已有证据");
+        } else {
+          const calls = payload.tool_calls || [];
+          appendChatProgress(
+            calls.length ? "模型已规划下一步" : "模型已完成分析规划",
+            calls.length ? `准备执行 ${calls.join("、")}` : "进入综合回答",
+            "done",
+          );
+        }
+      } else if (type === "tool.started") {
+        const description = describeChatTool(payload);
+        const item = appendChatProgress(description.label, description.detail);
+        toolItems.set(payload.call_id, item);
+        setChatProgressTitle(description.label);
+      } else if (type === "tool.completed") {
+        const item = toolItems.get(payload.call_id);
+        if (payload.error) {
+          finishChatProgressItem(item, `失败：${payload.error}`, "error");
+        } else {
+          const sources = (payload.summary?.sources || []).map((source) => {
+            return { market: "行情", news: "新闻", annual_report: "年报", web: "网络公告" }[source] || source;
+          });
+          finishChatProgressItem(
+            item,
+            `完成${sources.length ? ` · ${sources.join("、")}` : ""} · ${payload.duration_ms || 0}ms`,
+          );
+        }
+        setChatProgressTitle("模型正在分析检索结果");
+      } else if (type === "approval.required") {
+        appendChatProgress("等待操作确认", payload.summary || payload.tool_name || "", "running");
+        setChatProgressTitle("等待确认");
+      } else if (type === "message.delta") {
+        if (!answerBubble) {
+          const article = document.createElement("article");
+          article.className = "message assistant";
+          answerBubble = document.createElement("div");
+          answerBubble.className = "bubble";
+          article.appendChild(answerBubble);
+          messages.appendChild(article);
+          generatingItem = appendChatProgress("生成研究结论", "基于已取得的证据组织回答");
+        }
+        setChatProgressTitle("正在生成回答");
+        answerText += payload.text || "";
+        answerBubble.textContent = answerText;
+        messages.scrollTop = messages.scrollHeight;
+      } else if (type === "message.completed") {
+        citations = payload.citations || [];
+        finishChatProgressItem(generatingItem, "回答已生成");
+        appendChatCitations(answerBubble, citations);
+      } else if (type === "turn.completed") {
+        terminalEvent = "completed";
+        finishChatProgressItem(generatingItem, "完成");
+        setChatProgressTitle("分析完成");
+      } else if (type === "turn.failed") {
+        terminalEvent = "failed";
+        streamError = payload.error || "Agent 运行失败";
+        appendChatProgress("运行失败", streamError, "error");
+        setChatProgressTitle("分析失败");
+      } else if (type === "turn.cancelled") {
+        terminalEvent = "cancelled";
+        streamError = "本轮分析已停止";
+        appendChatProgress("分析已停止", "", "error");
+        setChatProgressTitle("分析已停止");
+      }
+    });
+
+    if (streamError) throw new Error(streamError);
+    if (!terminalEvent) throw new Error("进度连接提前结束，请重试。");
+    if (!answerText && state.chatThreadId) {
+      const items = await apiJson(`/api/agent/threads/${encodeURIComponent(state.chatThreadId)}/messages?limit=20`);
+      const assistant = [...items].reverse().find((item) => item.role === "assistant" && item.kind === "text");
+      if (assistant) {
+        answerText = assistant.content;
+        citations = assistant.citations || [];
+        if (!answerBubble) {
+          addMessage("assistant", answerText);
+          answerBubble = messages.querySelector(".message.assistant:last-of-type .bubble");
+        }
+        appendChatCitations(answerBubble, citations);
+      }
+    }
+    if (!answerText) addMessage("assistant", "Agent 未生成回答。");
+    const totalTime = formatChatElapsed();
+    stopChatProgressTimer();
+    if (chatElapsed) chatElapsed.textContent = totalTime;
+    chatStatus.textContent = `完成 · ${totalTime}`;
+    collapseChatProgress();
+    if (!state.chatThreads.some((thread) => thread.thread_id === state.chatThreadId)) {
+      await loadChatThreads(state.chatThreadId);
+    }
+  } catch (error) {
+    stopChatProgressTimer();
+    chatStatus.textContent = "失败";
+    appendChatProgress("请求失败", error.message || "聊天请求失败", "error");
     addMessage("error", error.message || "聊天请求失败。");
+    collapseChatProgress();
   } finally {
-    chatStatus.textContent = "就绪";
+    state.chatStreaming = false;
     chatStatus.classList.remove("busy");
     sendButton.disabled = false;
     questionInput.focus();
@@ -315,7 +1170,7 @@ function formatNewsExcerpt(item, maxLength = 180) {
 }
 
 function renderNewsItems(items) {
-  if (!items.length) { newsList.innerHTML = '<div class="empty-state">当前湖仓暂无可展示的新闻。</div>'; return; }
+  if (!items.length) { newsList.innerHTML = '<div class="empty-state">当前暂无可展示的新闻。</div>'; return; }
   newsList.innerHTML = items.map((item) => {
     const tags = [...(item.symbols || []), ...(item.entities || []).slice(0, 3)].map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("");
     const href = item.url ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.title)}</a>` : escapeHtml(item.title);
@@ -348,11 +1203,16 @@ function renderReports(items) {
     reportList.innerHTML = '<div class="empty-state">当前筛选条件下没有可展示的年报。</div>';
     return;
   }
+  const extractionStatusLabel = {
+    pending_parse: "PDF可用 · 待解析",
+    needs_review: "PDF可用 · 需复核",
+    ok: "文本可用",
+  };
   reportList.innerHTML = items.map((report) => `
     <article class="report-card" data-report-id="${escapeHtml(report.report_id)}">
       <h3>${escapeHtml(report.title)}</h3>
-      <div class="report-meta"><span>${escapeHtml(report.stock_code)} · ${escapeHtml(report.company_name || "公司名称未知")}</span><span>${escapeHtml(String(report.report_year))} 年报</span><span>${escapeHtml(formatDateTime(report.announcement_time))}</span><span>${escapeHtml(report.extraction_status || "未知状态")}</span></div>
-      <div class="report-actions"><a href="/api/reports/${encodeURIComponent(report.report_id)}/download" target="_blank" rel="noreferrer">打开 PDF</a>${report.page_count > 0 ? '<button type="button" data-action="read-page">查看首页文本</button>' : ""}</div>
+      <div class="report-meta"><span>${escapeHtml(report.stock_code)} · ${escapeHtml(report.company_name || "公司名称未知")}</span><span>${escapeHtml(String(report.report_year))} 年报</span><span>${escapeHtml(formatDateTime(report.announcement_time))}</span><span>${escapeHtml(extractionStatusLabel[report.extraction_status] || report.extraction_status || "未知状态")}</span></div>
+      <div class="report-actions"><a href="/api/reports/${encodeURIComponent(report.report_id)}/download" target="_blank" rel="noreferrer">打开 PDF</a>${report.page_count > 0 ? '<button type="button" data-action="read-page">查看首页文本</button>' : '<span class="muted-text">文本提取完成后可查看</span>'}</div>
       <div class="report-page-text" hidden></div>
     </article>`).join("");
 }
@@ -513,8 +1373,138 @@ pageNavButtons.forEach((button) => {
     });
     if (pageId === "researchPage") loadReports();
     if (pageId === "monitorPage") { loadWatchlist(); loadMonitorReports(); }
+    if (pageId === "agentPage" && !state.agentThreadId) loadAgentThreads();
     requestAnimationFrame(() => state.chart?.resize());
   });
+});
+
+newAgentThreadButton?.addEventListener("click", async () => {
+  try {
+    const thread = await apiJson("/api/agent/threads", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+    state.agentThreadId = thread.thread_id;
+    await loadAgentThreads(thread.thread_id);
+    agentQuestion.focus();
+  } catch (error) {
+    addAgentSystemMessage(error.message);
+  }
+});
+
+agentThreadList?.addEventListener("click", async (event) => {
+  const row = event.target.closest("[data-thread-id]");
+  if (!row) return;
+  const threadId = row.dataset.threadId;
+  const action = event.target.closest("button")?.dataset.action;
+  if (action === "archive") {
+    try {
+      await apiJson(`/api/agent/threads/${encodeURIComponent(threadId)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "archived" }) });
+      if (state.agentThreadId === threadId) state.agentThreadId = null;
+      await loadAgentThreads();
+    } catch (error) { addAgentSystemMessage(error.message); }
+    return;
+  }
+  await selectAgentThread(threadId);
+});
+
+agentComposer?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const question = agentQuestion.value.trim();
+  if (!question || state.agentStreaming) return;
+  agentQuestion.value = "";
+  agentToolTimeline.innerHTML = "";
+  try {
+    await submitAgentTurn(question);
+  } catch (error) {
+    addAgentSystemMessage(error.message || "研究请求失败");
+    state.agentStreaming = false;
+    agentSendButton.disabled = false;
+  }
+});
+
+modelSettingsForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const config = getLlmConfig();
+  if (!config.apiKey) {
+    renderLlmSettingsStatus();
+    llmApiKeyInput.focus();
+    return;
+  }
+  setSessionValue(LLM_KEY_STORAGE, config.apiKey);
+  setSessionValue(LLM_MODEL_STORAGE, config.model);
+  renderLlmSettingsStatus();
+});
+
+llmApiKeyInput?.addEventListener("input", renderLlmSettingsStatus);
+llmModelSelect?.addEventListener("change", () => {
+  setSessionValue(LLM_MODEL_STORAGE, llmModelSelect.value);
+  renderLlmSettingsStatus();
+});
+clearLlmKeyButton?.addEventListener("click", () => {
+  llmApiKeyInput.value = "";
+  setSessionValue(LLM_KEY_STORAGE, "");
+  renderLlmSettingsStatus();
+  llmApiKeyInput.focus();
+});
+
+agentQuestion?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    agentComposer.requestSubmit();
+  }
+});
+
+cancelAgentTurnButton?.addEventListener("click", async () => {
+  if (!state.agentThreadId || !state.agentTurnId) return;
+  try {
+    await apiJson(`/api/agent/threads/${encodeURIComponent(state.agentThreadId)}/turns/${encodeURIComponent(state.agentTurnId)}/cancel`, { method: "POST" });
+    agentRunStatus.textContent = "正在停止";
+  } catch (error) { addAgentSystemMessage(error.message); }
+});
+
+refreshInspectorButton?.addEventListener("click", () => loadInspector());
+manageWebDomainsButton?.addEventListener("click", async () => {
+  try {
+    const domains = await apiJson("/api/agent/web-domains");
+    const current = domains.map((item) => item.host_pattern).join("\n");
+    const value = window.prompt("已允许域名。输入域名新增；输入 -域名 删除；留空取消。\n\n" + current, "");
+    if (!value) return;
+    const trimmed = value.trim();
+    if (trimmed.startsWith("-")) {
+      const host = trimmed.slice(1).trim();
+      await apiJson(`/api/agent/web-domains/${encodeURIComponent(host)}`, { method: "DELETE" });
+      addAgentSystemMessage(`已从网页白名单移除：${host}`);
+    } else {
+      await apiJson("/api/agent/web-domains", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ host_pattern: trimmed }) });
+      addAgentSystemMessage(`已加入网页白名单：${trimmed}`);
+    }
+  } catch (error) { addAgentSystemMessage(error.message); }
+});
+
+agentMessages?.addEventListener("click", async (event) => {
+  if (event.target.closest('[data-action="open-monitor-dashboard"]')) {
+    document.querySelector('[data-page="monitorPage"]')?.click();
+    return;
+  }
+  const button = event.target.closest("button[data-decision]");
+  const card = button?.closest("[data-approval-id]");
+  if (button && card) {
+    await submitApproval(card.dataset.approvalId, button.dataset.decision === "approve", card);
+  }
+});
+
+newChatThreadButton?.addEventListener("click", createChatThread);
+chatThreadTabs?.addEventListener("click", async (event) => {
+  const archiveButton = event.target.closest("[data-archive-chat]");
+  if (archiveButton) {
+    event.stopPropagation();
+    await archiveChatThread(archiveButton.dataset.archiveChat);
+    return;
+  }
+  const tab = event.target.closest("[data-chat-thread]");
+  if (tab) await selectChatThread(tab.dataset.chatThread);
+});
+chatThreadTabs?.addEventListener("dblclick", async (event) => {
+  const tab = event.target.closest("[data-chat-thread]");
+  if (tab) await renameChatThread(tab.dataset.chatThread);
 });
 
 watchlistForm.addEventListener("submit", async (event) => {
@@ -599,7 +1589,7 @@ marketForm.addEventListener("submit", (event) => event.preventDefault());
 marketForm.addEventListener("change", (event) => {
   if (event.target.matches("select, input")) loadMarket();
 });
-chatForm.addEventListener("submit", (event) => { event.preventDefault(); const question = questionInput.value.trim(); if (!question) return; addMessage("user", question); questionInput.value = ""; sendQuestion(question); });
+chatForm.addEventListener("submit", (event) => { event.preventDefault(); const question = questionInput.value.trim(); if (!question || state.chatStreaming) return; addMessage("user", question); questionInput.value = ""; sendQuestion(question); });
 questionInput.addEventListener("keydown", (event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) chatForm.requestSubmit(); });
 refreshNewsButton.addEventListener("click", loadNews);
 pageSizeSelect.addEventListener("change", () => { state.newsPage = 1; state.newsPageSize = Number(pageSizeSelect.value); loadNews(); });
@@ -608,6 +1598,8 @@ nextPageButton.addEventListener("click", () => { state.newsPage += 1; loadNews()
 window.addEventListener("resize", () => state.chart?.resize());
 
 initializeDateRange();
+loadLlmSettings();
+loadChatThreads();
 loadSecurityOptions();
 loadNews();
 for (let year = new Date().getFullYear(); year >= new Date().getFullYear() - 10; year -= 1) {

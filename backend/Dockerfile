@@ -11,7 +11,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /tmp/openfinance-requirements.txt
-RUN pip install --no-cache-dir -r /tmp/openfinance-requirements.txt
+RUN pip install --no-cache-dir --timeout 120 --retries 5 -r /tmp/openfinance-requirements.txt
 RUN python -c "import pyarrow, pyiceberg, pyiceberg_core, pgvector, psycopg, s3fs"
 
 COPY . /app

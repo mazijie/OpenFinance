@@ -65,6 +65,18 @@ def test_frontend_page_and_assets() -> None:
     assert "/api/market" in script_response.text
     assert "/api/watchlist" in script_response.text
     assert "/api/monitor/reports" in script_response.text
+    assert "/api/agent/threads" in script_response.text
     assert "echarts" in page_response.text
     assert "marketChart" in page_response.text
     assert "monitorReportList" in page_response.text
+    assert 'id="marketPage"' in page_response.text
+    assert "行情、智能问答" in page_response.text
+    assert 'id="modelSettingsForm"' in page_response.text
+    assert 'id="chatThreadTabs"' in page_response.text
+    assert 'id="newChatThreadButton"' in page_response.text
+    assert 'id="agentPage"' not in page_response.text
+    assert "湖仓" not in page_response.text
+    assert "LAKEHOUSE" not in page_response.text
+    assert "Silver/Gold" not in script_response.text
+    assert "预算" not in page_response.text
+    assert "预算" not in script_response.text

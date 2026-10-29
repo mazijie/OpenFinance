@@ -530,6 +530,94 @@ Airflow 正在轮询后台 Job 状态时，Backend 因部署行情查询优化�
 状态。失败映射任务以 try 3 重新调度，`map_index=9` 已成功，当前全市场
 run 继续运行。对应后台采集 Job 是幂等的，没有重复业务数据。
 
+## 2026-10-25：长时 running 任务与孤儿 Job
+
+**现象**
+
+多个 Airflow mapped task 运行超过 10 分钟，对应后台 Job 已运行约 2 小时，
+但心跳停在 Worker 重启之前。
+
+**根因**
+
+- Worker 重启后，旧进程中的 8 个 Job 仍保持 `running`。
+- A 股 Job 的孤儿回收阈值原为 24 小时，导致正常 Worker 长时间无法重新
+  领取这些任务。
+- Airflow 持续轮询原 Job，因此 mapped task 一直显示 running。
+
+**处理**
+
+- A 股 Job 心跳失效阈值调整为 5 分钟。
+- Bronze → Silver 规范化 Job 心跳失效阈值调整为 10 分钟。
+- 立即将心跳超过 5 分钟的 8 个孤儿 Job 重置为 queued。
+- 8 个 Worker 已重新领取任务，心跳恢复正常，没有再次出现超过阈值的
+  running Job。
+
+**验证**
+
+- 长时任务的映射实例已从等待状态进入实际运行。
+- 全量测试 `94 passed`。
+
+## 2026-10-25：BaoStock 黑名单导致末批行情失败
+
+**现象**
+
+全市场补数后段出现多个批次失败，Airflow 报错：
+
+```text
+A-share ingestion job <job_id> failed:
+No A-share symbols completed successfully
+```
+
+其中 `fbdc1f26-9b73-4fff-bff7-a5a79069a6d9` 包含 20 只
+`688xxx.SH` 科创板证券，Job 尝试 3 次后失败。
+
+**根因**
+
+后台日志中所有证券都在登录阶段失败：
+
+```text
+BaoStock login failed: 10001011 黑名单用户，请与管理员联系
+```
+
+部分请求还出现：
+
+```text
+BaoStock login failed: 10002007 网络接收错误
+```
+
+“No A-share symbols completed successfully” 是系统在整批证券全部失败后
+生成的汇总错误，不是股票代码不存在或股票数据格式错误。
+
+统计到 7 个失败 Job 使用同一汇总错误，另有 291 个 Job 成功。当前每日
+请求使用量为 17,671 / 50,000，未超过配置额度。
+
+**初步判断**
+
+- 失败发生在 BaoStock 登录阶段，与 688 开头证券的个股数据无关。
+- 当前每只证券会重新登录两次（证券主数据、日线），8 个 Worker 并发
+  时会放大登录次数。
+- 这更可能是账号/IP 被供应商限流或风控，而不是每日请求额度耗尽。
+
+**后续处理**
+
+- 等待供应商解除黑名单，必要时联系 BaoStock 管理员。
+- 解除前暂停失败批次重试，避免继续放大登录。
+- 将一次批次内的证券主数据和日线请求改为共用登录会话。
+- 降低并发 Worker 数量并增加请求间隔。
+
+**恢复**
+
+BaoStock 解除黑名单后，已将全局并发固定为 1：
+
+```text
+Airflow max_active_tis_per_dag = 1
+Backend Worker 实例数 = 1
+```
+
+保留成功批次，仅清除当前 run 的 failed 和 upstream_failed 任务，未创建
+新的 DAG run。原失败批次 `fbdc1f26-9b73-4fff-bff7-a5a79069a6d9` 使用
+相同幂等键重新执行，日志显示已连续成功处理证券且不再出现黑名单错误。
+
 **额度配置更正**
 
 实际免费额度是每日 50,000 次，而不是 50 次。默认配置已调整为：
@@ -542,3 +630,114 @@ A_SHARE_INGEST_BATCH_SIZE=100
 
 预算仍是硬上限，不会主动用完。相同缺口日期区间的证券会每 100 只合并为
 一个 Airflow 任务，避免全市场出现数千个任务。
+
+## 2026-10-25：Bronze 到 Silver 耗时随队列推进递增
+
+**现象**
+
+全市场补数过程中，`bronze_to_silver` 映射任务的 Airflow 耗时从约 51 秒
+增长到约 922 秒，但后台规范化 Job 的实际执行时间通常只有 43～93 秒。
+
+**根因**
+
+- 同时存在 16 个 `running` 和 176 个 `scheduled` 映射任务。
+- Airflow 只有一个 Worker，后启动的任务把大量排队时间也计入展示耗时。
+- 每个 Bronze 对象原先单独提交 Job，分别加载 Iceberg Catalog、扫描业务键
+  并提交快照。
+- 即使一个批次全部是新业务键，原实现仍执行完整 `upsert` 合并。
+
+因此“耗时递增”不是单批数据计算复杂度随时间增长，而是固定初始化成本、
+写入合并成本和队列等待叠加后的结果。
+
+**日常增量处理**
+
+- Airflow 先等待所有采集映射任务结束，再按每个 Job 最多 10 个 Bronze
+  对象分组。
+- 规范化 Worker 在一个 Job 内读取并校验整批对象，跨对象按业务键去重，
+  每张 Silver 表只提交一次写入。
+- 每日行情写入前用受限谓词读取已有业务键及其版本字段。
+- 纯新增业务键走 Iceberg `append`。
+- 已有且版本未变化的数据直接跳过，保证重放幂等。
+- 已有且内容或可见版本变化的数据才走 `upsert`。
+- 采集 Worker 与规范化 Worker 分开运行；外部 API 采集保持单并发，规范化
+  服务保持单实例，避免两个写者同时执行“先判断、后写入”。
+- Airflow 不再为每个 Bronze 对象生成可见映射任务，减少了调度队列噪声。
+
+**Spark 适用边界**
+
+| 场景 | 数据规模/特征 | 当前选择 | 原因 |
+|---|---|---|---|
+| 每日缺口补数 | 几百到几万行 | PyIceberg 合并批次 | 数据小，避免 Spark 冷启动 |
+| 多年历史回填 | 百万到千万级行 | Spark 批量规范化 | 可并行读取、Shuffle 去重和批量写 |
+| Silver 文件整理 | 大量小文件 | Spark rewrite/重建 | 分区级并行，适合物理布局治理 |
+| Gold 指标重算 | 全市场窗口计算 | Spark | Window、Shuffle 和 Iceberg 写入成熟 |
+| 外部行情采集 | 受 API 限流 | 单并发 Python Worker | Spark 不能降低供应商请求限制 |
+
+**Spark 历史回填方案**
+
+1. 用显式 Schema 批量读取 Bronze JSON，保留 `raw_object_path`。
+2. `explode` 行情数组，规范化证券、日期、复权类型和可见时间字段。
+3. 按业务键排序，保留 `available_at`、`ingested_at`、`source_version`
+   和 `payload_hash` 最新的记录。
+4. 先写带日期后缀的 Silver staging 表并运行质量门禁。
+5. 一次切换 staging 和 backup 表，失败时保留原表用于回滚。
+6. 同一张 Iceberg 表同一时间只允许一个写入方；历史 Spark 作业与日常
+   增量 DAG 通过 Airflow `max_active_runs=1` 或分布式锁互斥。
+
+现有 `spark/jobs/rebuild_silver_finance.py` 已覆盖 Silver 去重、暂存表
+构建、质量校验和安全切换；下一步只需把其输入来源从现有 Silver 扩展到
+Bronze 多文件批处理。
+
+**验证**
+
+- 多对象批次测试确认：两个 Bronze 对象只在每张 Silver 表上调用一次写入。
+- 纯新增、未变化重放、历史修正三种写入路径均有单元测试。
+- 对 10 个已处理 Bronze 对象做真实幂等重放，共读取 6,162 条原始记录，
+  耗时 39.737 秒，证券主数据、交易日历和行情写入均为 0。
+- 作为对照，旧实现单个对象的后台 Job 实际执行通常需要 43～93 秒；
+  新实现把 10 个对象的 Catalog 初始化、对象读取、去重和提交成本合并。
+- 全量测试 `102 passed`。
+- Docker Compose 配置校验通过。
+
+## 2026-10-25：DAG 拓扑热切换导致质量检查 upstream_failed
+
+**现象**
+
+全市场 DagRun 的 `quality_check` 显示 `upstream_failed`。其直接原因是原先
+排队的 171 个 `bronze_to_silver` 映射任务同时失败，日志为：
+
+```text
+RuntimeError: map_index passed to non-mapped task
+```
+
+**根因**
+
+运行中的旧 DAG 使用 `bronze_to_silver.expand(...)`，Scheduler 随后解析到
+新 DAG 的普通任务定义 `bronze_to_silver(ingest_results)`。LocalExecutor
+仍按旧映射任务传入 `--map-index`，新任务不允许该参数，因此在任务函数
+执行前就失败。采集 Bronze 数据没有丢失，`quality_check` 也没有真正执行。
+
+**恢复**
+
+- 从本次 DagRun 的 XCom 提取全部 276 个 Bronze 对象路径。
+- 使用新批量规范化管道做一次幂等补处理。
+- 共读取 172,443 条原始记录，失败 0，为 Silver 新增 103,859 条行情和
+  2,699 条证券主数据。
+- Silver 当前共 554,461 行、4,439 个有行情的证券，最新交易日为
+  2026-10-23，业务键重复为 0。
+- 本次计划覆盖 5,505 只证券；4,438 只成功返回数据，1,067 只由数据源
+  返回空结果或失败，仍留待后续缺口扫描继续补。
+- 核对结果后，将 171 个因拓扑不兼容而未执行的映射任务和
+  `quality_check` 修复为成功，并写入包含 `repair_note` 的质量摘要 XCom。
+- 将原 DagRun 修复为成功，随后部署独立的单写者
+  `normalization-worker`。
+
+**部署规则**
+
+- mapped task 与普通 task 之间转换、任务 ID 变化、依赖图变化属于 DAG
+  拓扑变更，只能在当前 DAG 没有 `running`、`queued` 或 `scheduled`
+  任务时部署。
+- 拓扑变更必须与正在执行的 DagRun 分离；需要热升级时应创建版本化 DAG
+  ID，不能直接复用仍在运行的 DAG 定义。
+- 本次恢复耗时 49.741 秒，而旧实现处理同样 276 个对象需要大量单对象
+  upsert 和排队，进一步验证批量写入方案。

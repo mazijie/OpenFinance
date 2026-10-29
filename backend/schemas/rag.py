@@ -82,6 +82,7 @@ class RagArticleResult(BaseModel):
     published_at: datetime
     url: str
     final_score: float
+    metadata: dict[str, Any] = Field(default_factory=dict)
     evidence_chunks: list[RagEvidence] = Field(default_factory=list)
 
 

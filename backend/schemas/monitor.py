@@ -143,6 +143,7 @@ class MonitorRunRequest(BaseModel):
     trading_date: date | None = None
     cutoff_at: datetime | None = None
     force: bool = False
+    thread_id: str | None = None
 
     @field_validator("cutoff_at")
     @classmethod
@@ -159,6 +160,7 @@ class MonitorRun(BaseModel):
     cutoff_at: datetime
     status: MonitorRunStatus
     watchlist_version: str
+    origin_thread_id: str | None = None
     config: dict[str, Any] = Field(default_factory=dict)
     stats: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
@@ -170,4 +172,5 @@ class MonitorRun(BaseModel):
 class MonitorRunAccepted(BaseModel):
     run_id: str
     status: MonitorRunStatus
+    thread_id: str | None = None
     deduplicated: bool = False

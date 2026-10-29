@@ -320,3 +320,38 @@ A_SHARE_INGEST_BATCH_SIZE=20
 市场的日常缺口；预算是硬上限而不是目标消耗量。相同日期区间按每批 20
 只证券合并为 Airflow 任务。预算不足时只处理部分证券，其余缺口留到下
 一个预算周期，不会继续超额请求。
+
+## Silver 增量与 Spark 的分工
+
+日常 Bronze → Silver 不再“一个对象提交一次 upsert”，而是先把最多 10
+个 Bronze 对象合并为一个规范化 Job：
+
+```text
+Bronze object 1 ─┐
+Bronze object 2 ─┼─> 读取/校验/跨对象去重 ─> 每张 Silver 表一次提交
+...              │
+Bronze object 10 ┘
+```
+
+行情写入会先读取目标业务键的窄范围版本信息：
+
+```text
+新业务键           -> append
+已有且版本未变化   -> skip
+已有且版本发生变化 -> upsert
+```
+
+这保留了任务重试的幂等性，同时避免正常新增数据执行昂贵的全量匹配更新。
+采集 Worker 与规范化 Worker 分离，外部 API 仍保持单并发；规范化服务也
+保持单实例，避免并发写 Iceberg。
+
+Spark 不用于低延迟的每日小增量。它适合以下批处理场景：
+
+- 全市场多年历史 Bronze 回填。
+- Silver 小文件整理、重分区和去重迁移。
+- 全市场 Gold 指标的全量重算或月度分区重建。
+
+历史回填应先写 staging 表，通过行数、业务键唯一性、日期范围、OHLC 和
+覆盖证券数检查，再切换正式表。`rebuild_silver_finance.py` 已经实现了
+暂存、备份、切换和回滚框架；后续历史作业可以从 Bronze 直接生成同类
+staging 表，而不必先污染正式 Silver。

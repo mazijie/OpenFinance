@@ -1,0 +1,12 @@
+.git
+.env
+.env.*
+!.env.example
+.cache
+.pytest_cache
+**/__pycache__
+runtime
+metastore_db
+*.log
+.codex
+.agents
