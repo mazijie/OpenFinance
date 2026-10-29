@@ -36,6 +36,9 @@ class AShareGapService:
         adjustment_type: str = "qfq",
         lookback_days: int | None = None,
         end_date: date | None = None,
+        start_date: date | None = None,
+        symbols: list[str] | None = None,
+        mode: str = "daily",
     ) -> dict[str, Any]:
         provider_name = settings.FINANCE_DEFAULT_PROVIDER
         request_limit = settings.BAOSTOCK_DAILY_REQUEST_LIMIT
@@ -45,33 +48,29 @@ class AShareGapService:
         resolved_lookback = lookback_days or settings.A_SHARE_GAP_LOOKBACK_DAYS
         if resolved_lookback <= 0:
             raise ValueError("lookback_days must be positive")
-        range_start = resolved_end - timedelta(days=resolved_lookback - 1)
+        range_start = start_date or resolved_end - timedelta(days=resolved_lookback - 1)
+        if range_start > resolved_end:
+            raise ValueError("start_date must not be after end_date")
+        if mode not in {"daily", "backfill"}:
+            raise ValueError("mode must be daily or backfill")
 
         securities = self.writer.scan_security_master()
         security_by_id = {security.security_id: security for security in securities}
         calendar = self.writer.scan_trading_calendar()
-        known_exchanges = {security.exchange for security in securities}
-
-        calendar_refreshes = self._refresh_stale_calendar(
-            calendar=calendar,
-            exchanges=sorted(known_exchanges),
-            range_start=range_start,
-            range_end=resolved_end,
-        )
-        if calendar_refreshes:
-            calendar = self.writer.scan_trading_calendar()
-
         universe, universe_refresh_requests = self._load_universe(provider_name, resolved_end)
         if not universe:
             raise ValueError("A-share universe is empty")
-        expected_symbols = sorted(set(universe) | set(security_by_id))
+        requested_symbols = {symbol.strip().upper() for symbol in symbols or [] if symbol.strip()}
+        if symbols is not None and (not requested_symbols or not requested_symbols <= set(universe)):
+            raise ValueError("symbols must contain only securities in the current A-share universe")
+        expected_symbols = sorted(requested_symbols if symbols is not None else set(universe))
         exchanges = {
             security_by_id[symbol].exchange
             if symbol in security_by_id
             else symbol.rsplit(".", 1)[-1]
             for symbol in expected_symbols
         }
-        calendar_refreshes += self._refresh_stale_calendar(
+        calendar_refreshes = self._refresh_stale_calendar(
             calendar=calendar,
             exchanges=sorted(exchanges),
             range_start=range_start,
@@ -79,6 +78,13 @@ class AShareGapService:
         )
         if calendar_refreshes:
             calendar = self.writer.scan_trading_calendar()
+
+        missing_calendar = self._missing_calendar_days(calendar, sorted(exchanges), range_start, resolved_end)
+        if missing_calendar:
+            return {"status": "calendar_incomplete", "mode": mode, "provider": provider_name,
+                    "adjustment_type": adjustment_type, "range_start": range_start.isoformat(),
+                    "range_end": resolved_end.isoformat(), "pending_symbol_count": len(expected_symbols),
+                    "missing_calendar_days": len(missing_calendar), "plans": []}
 
         open_dates = self._open_dates_by_exchange(calendar, range_start, resolved_end)
         actual = self.writer.scan_daily_bar_keys(
@@ -94,7 +100,12 @@ class AShareGapService:
             security = security_by_id.get(symbol)
             exchange = security.exchange if security else symbol.rsplit(".", 1)[-1]
             dates = open_dates.get(exchange, [])
-            absent = [trading_date for trading_date in dates if (symbol, trading_date) not in actual]
+            absent = [
+                trading_date for trading_date in dates
+                if (security is None or security.list_date is None or trading_date >= security.list_date)
+                and (security is None or security.delist_date is None or trading_date <= security.delist_date)
+                and (symbol, trading_date) not in actual
+            ]
             if not absent:
                 continue
             missing_pair_count += len(absent)
@@ -123,9 +134,11 @@ class AShareGapService:
             selected.append(item)
             estimated_requests += item_requests
 
-        status = "available" if selected else "complete" if not missing else "quota_exhausted"
+        unknown_metadata = [symbol for symbol in expected_symbols if symbol not in security_by_id or security_by_id[symbol].list_date is None]
+        status = "available" if selected else "quota_exhausted" if missing else "metadata_incomplete" if unknown_metadata else "complete"
         return {
             "status": status,
+            "mode": mode,
             "provider": provider_name,
             "adjustment_type": adjustment_type,
             "range_start": range_start.isoformat(),
@@ -135,6 +148,7 @@ class AShareGapService:
             "universe_symbol_count": len(expected_symbols),
             "missing_symbol_count": len(missing),
             "missing_pair_count": missing_pair_count,
+            "metadata_incomplete_symbols": unknown_metadata,
             "selected_symbol_count": len(selected),
             "pending_symbol_count": max(0, len(missing) - len(selected)),
             "estimated_requests": estimated_requests,
@@ -159,37 +173,33 @@ class AShareGapService:
         range_start: date,
         range_end: date,
     ) -> int:
-        latest_by_exchange: dict[str, date] = {}
-        for record in calendar:
-            latest_by_exchange[record.exchange] = max(
-                record.trading_date,
-                latest_by_exchange.get(record.exchange, date.min),
-            )
-
-        stale_ranges: list[tuple[str, date, date]] = []
-        for exchange in exchanges:
-            latest = latest_by_exchange.get(exchange)
-            if latest is None:
-                stale_ranges.append((exchange, range_start, range_end))
-            elif latest < range_end:
-                stale_ranges.append((exchange, max(range_start, latest + timedelta(days=1)), range_end))
-
-        if not stale_ranges:
+        missing = self._missing_calendar_days(calendar, exchanges, range_start, range_end)
+        if not missing:
             return 0
         remaining = self.budget_store.remaining(
-            provider=settings.FINANCE_DEFAULT_PROVIDER,
-            daily_limit=settings.BAOSTOCK_DAILY_REQUEST_LIMIT,
+            provider=settings.FINANCE_DEFAULT_PROVIDER, daily_limit=settings.BAOSTOCK_DAILY_REQUEST_LIMIT
         )
-        if remaining < len(stale_ranges):
-            return 0
-        for exchange, start, end in stale_ranges:
-            records = self.provider.fetch_trading_calendar(
-                exchange=exchange,
-                start_date=start,
-                end_date=end,
-            )
-            self.writer.append_trading_calendar(records)
-        return len(stale_ranges)
+        refreshed = 0
+        for exchange in exchanges:
+            dates = [day for item_exchange, day in missing if item_exchange == exchange]
+            if not dates or refreshed >= remaining:
+                continue
+            try:
+                records = self.provider.fetch_trading_calendar(exchange=exchange, start_date=min(dates), end_date=max(dates))
+                self.writer.append_trading_calendar(records)
+                refreshed += 1
+            except Exception:
+                # Incomplete or unavailable calendars must never imply complete coverage.
+                continue
+        return refreshed
+
+    @staticmethod
+    def _missing_calendar_days(calendar: list[TradingCalendarRecord], exchanges: list[str], start_date: date, end_date: date) -> list[tuple[str, date]]:
+        present = {(item.exchange, item.trading_date) for item in calendar}
+        return [(exchange, start_date + timedelta(days=offset))
+                for exchange in exchanges
+                for offset in range((end_date - start_date).days + 1)
+                if (exchange, start_date + timedelta(days=offset)) not in present]
 
     @staticmethod
     def _open_dates_by_exchange(

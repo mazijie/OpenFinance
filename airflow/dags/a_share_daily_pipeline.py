@@ -11,7 +11,7 @@ from airflow.exceptions import AirflowSkipException
 from airflow.operators.python import get_current_context
 from airflow.timetables.interval import CronDataIntervalTimetable
 
-from a_share_pipeline_helpers import _submit_a_share_ingestion, _submit_finance_normalization, _wait_for_a_share_ingestion, _wait_for_finance_normalization, _post_internal_job, build_gap_ingest_jobs
+from a_share_pipeline_helpers import _submit_a_share_ingestion, _submit_finance_normalization, _wait_for_a_share_ingestion, _wait_for_finance_normalization, _post_internal_job, build_gap_ingest_jobs, build_normalization_batches
 
 
 @dag(
@@ -38,6 +38,8 @@ def a_share_daily_pipeline():
                 "lookback_days": int(os.getenv("A_SHARE_GAP_LOOKBACK_DAYS", "60")),
             },
         )
+        if plan.get("status") in {"calendar_incomplete", "metadata_incomplete"}:
+            raise ValueError(f"A-share gap planning incomplete: {plan}")
         if plan.get("status") != "available":
             raise AirflowSkipException(
                 f"No A-share gap batch scheduled: status={plan.get('status')}, "
@@ -56,7 +58,7 @@ def a_share_daily_pipeline():
     @task(
         retries=1,
         retry_delay=timedelta(minutes=5),
-        max_active_tis_per_dag=int(os.getenv("A_SHARE_MAX_ACTIVE_BATCHES", "8")),
+        max_active_tis_per_dag=int(os.getenv("A_SHARE_MAX_ACTIVE_BATCHES", "1")),
     )
     def ingest_a_share_daily_bars(
         symbols: list[str],
@@ -65,7 +67,7 @@ def a_share_daily_pipeline():
         include_security_master: bool,
     ) -> dict[str, object]:
         context = get_current_context()
-        idempotency_key = f"{context['run_id']}:{context['task_instance'].map_index}"
+        idempotency_key = f"{context['dag'].dag_id}:{context['run_id']}:{context['task_instance'].map_index}"
         job_id = _submit_a_share_ingestion({
             "symbols": symbols,
             "start_date": f"{window['start_date']}T00:00:00+00:00",
@@ -80,15 +82,26 @@ def a_share_daily_pipeline():
             raise ValueError(f"No daily bars returned for batch of {len(symbols)} symbols despite {missing_date_count} missing dates")
         return result
 
-    @task(retries=0)
-    def bronze_to_silver(ingest_result: dict[str, object]) -> dict[str, int]:
-        return _wait_for_finance_normalization(_submit_finance_normalization({"object_paths": [str(ingest_result["object_path"])]}))  # type: ignore[return-value]
+    @task(retries=0, max_active_tis_per_dag=1)
+    def bronze_to_silver(ingest_results: list[dict[str, object]]) -> list[dict[str, int]]:
+        batches = build_normalization_batches(
+            ingest_results,
+            int(os.getenv("A_SHARE_NORMALIZATION_BATCH_SIZE", "10")),
+        )
+        return [
+            _wait_for_finance_normalization(
+                _submit_finance_normalization({"object_paths": batch})
+            )
+            for batch in batches
+        ]  # type: ignore[list-item]
 
     @task
     def quality_check(plan: dict[str, object], ingest_results: list[dict[str, object]], silver_stats: list[dict[str, int]]) -> dict[str, int]:
         expected = int(plan["selected_symbol_count"])
-        if len(ingest_results) != expected or len(silver_stats) != expected:
+        if sum(int(item.get("symbol_count", 0)) for item in ingest_results) != expected:
             raise ValueError("A-share gap batch results are incomplete")
+        if sum(int(item.get("processed_objects", 0)) for item in silver_stats) != len(ingest_results):
+            raise ValueError("Silver normalization did not process every Bronze object")
         if sum(int(item.get("daily_bar_count", 0)) for item in ingest_results) <= 0:
             raise ValueError("No selected symbol returned daily bars")
         if any(int(item.get("failed_count", 0)) for item in silver_stats):
@@ -98,8 +111,10 @@ def a_share_daily_pipeline():
             for item in ingest_results
             for symbol in item.get("failed_symbols", [])
         ]
+        if failed_symbols:
+            raise ValueError(f"A-share ingestion failed for {len(failed_symbols)} symbols: {failed_symbols}")
         return {
-            "processed_symbols": len(ingest_results),
+            "processed_symbols": sum(int(item.get("symbol_count", 0)) for item in ingest_results),
             "daily_bar_count": sum(int(item.get("daily_bar_count", 0)) for item in ingest_results),
             "written_daily_bars": sum(int(item.get("written_daily_bars", 0)) for item in silver_stats),
             "failed_symbol_count": len(failed_symbols),
@@ -108,7 +123,7 @@ def a_share_daily_pipeline():
 
     plan = build_window()
     ingest_results = ingest_a_share_daily_bars.expand_kwargs(build_ingest_jobs(plan))
-    silver_stats = bronze_to_silver.expand(ingest_result=ingest_results)
+    silver_stats = bronze_to_silver(ingest_results)
     quality_check(plan, ingest_results, silver_stats)
 
 

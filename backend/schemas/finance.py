@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 from math import ceil
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
+
+
+UTC = timezone.utc
 
 
 def _ensure_utc_datetime(value: datetime | str | None) -> datetime | None:

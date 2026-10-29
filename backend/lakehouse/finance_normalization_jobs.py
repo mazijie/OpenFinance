@@ -41,10 +41,15 @@ class FinanceNormalizationJobStore:
         self.ensure_schema()
         with self._connection() as c, c.cursor() as cur:
             cur.execute(f"UPDATE {self.fqtn} SET heartbeat_at=now() WHERE job_id=%s AND status='running'", (UUID(jid),))
-    def claim(self) -> dict[str, Any] | None:
+    def claim(self, stale_after_seconds: int | None = None) -> dict[str, Any] | None:
         self.ensure_schema()
+        stale_seconds = (
+            stale_after_seconds
+            if stale_after_seconds is not None
+            else settings.FINANCE_NORMALIZATION_STALE_SECONDS
+        )
         with self._connection() as c, c.cursor() as cur:
-            cur.execute(f"WITH candidate AS (SELECT job_id FROM {self.fqtn} WHERE status='queued' OR (status='running' AND heartbeat_at < now()-interval '30 minutes') ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE {self.fqtn} j SET status='running',attempts=j.attempts+1,started_at=COALESCE(j.started_at,now()),heartbeat_at=now(),error=NULL FROM candidate WHERE j.job_id=candidate.job_id RETURNING j.job_id,j.payload,j.attempts"); row=cur.fetchone()
+            cur.execute(f"WITH candidate AS (SELECT job_id FROM {self.fqtn} WHERE status='queued' OR (status='running' AND heartbeat_at < now()-interval '{int(stale_seconds)} seconds') ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE {self.fqtn} j SET status='running',attempts=j.attempts+1,started_at=COALESCE(j.started_at,now()),heartbeat_at=now(),error=NULL FROM candidate WHERE j.job_id=candidate.job_id RETURNING j.job_id,j.payload,j.attempts"); row=cur.fetchone()
         return None if row is None else {"job_id":str(row[0]),"payload":row[1],"attempts":row[2]}
     def _update(self,jid,status,result=None,error=None):
         with self._connection() as c, c.cursor() as cur: cur.execute(f"UPDATE {self.fqtn} SET status=%s,result=%s::jsonb,error=%s,finished_at=now(),heartbeat_at=now() WHERE job_id=%s",(status,json.dumps(result,default=str) if result is not None else "null",error,UUID(jid)))

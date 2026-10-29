@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import datetime
 from datetime import date
+from typing import Any
 
 from backend.lakehouse.finance_tables import (
     DAILY_BARS_ARROW_SCHEMA,
@@ -15,7 +16,7 @@ from backend.lakehouse.finance_tables import (
     ensure_trading_calendar_table,
 )
 from backend.logging_utils import get_logger
-from backend.lakehouse.write_coordination import upsert_with_retry
+from backend.lakehouse.write_coordination import coordinated_write_with_retry, upsert_with_retry
 from backend.schemas.finance import DailyBarRecord, SecurityMasterRecord, TradingCalendarRecord
 
 logger = get_logger(__name__)
@@ -85,26 +86,148 @@ class FinanceWriter:
     def append_daily_bars(self, records: list[DailyBarRecord]) -> int:
         if not records:
             return 0
-        arrow_module = self._get_arrow_module()
-        arrow_table = arrow_module.Table.from_pylist([record.model_dump() for record in records], schema=DAILY_BARS_ARROW_SCHEMA)
-        result = upsert_with_retry(
-            lambda: self._reload_daily_bars(),
-            arrow_table,
-            table_name="daily_bars",
-            join_cols=["provider", "adjustment_type", "security_id", "trading_date"],
+
+        return coordinated_write_with_retry(
+            lambda: self._append_daily_bars_locked(records), table_name="daily_bars"
         )
-        written_count = result.rows_inserted + result.rows_updated
+
+    def _append_daily_bars_locked(self, records: list[DailyBarRecord]) -> int:
+        keys = {
+            (
+                record.provider,
+                record.adjustment_type,
+                record.security_id,
+                record.trading_date,
+            )
+            for record in records
+        }
+        existing_versions = self._existing_daily_versions(keys)
+        new_records: list[DailyBarRecord] = []
+        changed_records: list[DailyBarRecord] = []
+        unchanged_count = 0
+        for record in records:
+            key = (
+                record.provider,
+                record.adjustment_type,
+                record.security_id,
+                record.trading_date,
+            )
+            existing_version = existing_versions.get(key)
+            if existing_version is None:
+                new_records.append(record)
+            elif existing_version == self._daily_record_version(record):
+                unchanged_count += 1
+            else:
+                changed_records.append(record)
+
+        inserted_count = self._append_new_daily_bars(new_records)
+        updated_count = self._update_changed_daily_bars(changed_records)
+        written_count = inserted_count + updated_count
         logger.info(
             "Silver 行情写入完成",
             event="silver_market_written",
             extra_fields={
                 "offered_count": len(records),
-                "inserted_count": result.rows_inserted,
-                "updated_count": result.rows_updated,
+                "new_count": len(new_records),
+                "changed_count": len(changed_records),
+                "unchanged_count": unchanged_count,
+                "inserted_count": inserted_count,
+                "updated_count": updated_count,
                 "written_count": written_count,
             },
         )
         return written_count
+
+    def _append_new_daily_bars(self, records: list[DailyBarRecord]) -> int:
+        if not records:
+            return 0
+        arrow_module = self._get_arrow_module()
+        arrow_table = arrow_module.Table.from_pylist(
+            [record.model_dump() for record in records],
+            schema=DAILY_BARS_ARROW_SCHEMA,
+        )
+        self._reload_daily_bars().append(arrow_table)
+        return len(records)
+
+    def _update_changed_daily_bars(self, records: list[DailyBarRecord]) -> int:
+        if not records:
+            return 0
+        arrow_module = self._get_arrow_module()
+        arrow_table = arrow_module.Table.from_pylist(
+            [record.model_dump() for record in records],
+            schema=DAILY_BARS_ARROW_SCHEMA,
+        )
+        result = self._reload_daily_bars().upsert(
+            arrow_table,
+            join_cols=["provider", "adjustment_type", "security_id", "trading_date"],
+            snapshot_properties={"openfinance.write-mode": "upsert"},
+        )
+        return result.rows_inserted + result.rows_updated
+
+    def _existing_daily_versions(
+        self,
+        keys: set[tuple[str, str, str, date]],
+    ) -> dict[tuple[str, str, str, date], tuple[Any, Any, str, str]]:
+        if not keys:
+            return {}
+        providers = sorted({provider for provider, _, _, _ in keys})
+        adjustment_types = sorted({adjustment_type for _, adjustment_type, _, _ in keys})
+        security_ids = sorted({security_id for _, _, security_id, _ in keys})
+        trading_dates = sorted({trading_date for _, _, _, trading_date in keys})
+
+        try:
+            from pyiceberg.expressions import And, In
+
+            table = (
+                self._reload_daily_bars()
+                .scan(
+                    row_filter=And(
+                        In("provider", providers),
+                        In("adjustment_type", adjustment_types),
+                        In("security_id", security_ids),
+                        In("trading_date", trading_dates),
+                    )
+                )
+                .select(
+                    "provider",
+                    "adjustment_type",
+                    "security_id",
+                    "trading_date",
+                    "available_at",
+                    "ingested_at",
+                    "source_version",
+                    "payload_hash",
+                )
+                .to_arrow()
+            )
+        except ImportError:  # pragma: no cover - test fallback without pyiceberg
+            table = self._scan_arrow_table(self._reload_daily_bars())
+
+        existing: dict[tuple[str, str, str, date], tuple[Any, Any, str, str]] = {}
+        for row in table.to_pylist():
+            key = (
+                row["provider"],
+                row["adjustment_type"],
+                row["security_id"],
+                row["trading_date"],
+            )
+            if key in keys:
+                existing[key] = (
+                    row.get("available_at"),
+                    row.get("ingested_at"),
+                    str(row.get("source_version") or ""),
+                    str(row.get("payload_hash") or ""),
+                )
+        return existing
+
+    @staticmethod
+    def _daily_record_version(record: DailyBarRecord) -> tuple[Any, Any, str, str]:
+        return (
+            record.available_at,
+            record.ingested_at,
+            record.source_version or "",
+            record.payload_hash or "",
+        )
 
     def scan_security_master(self) -> list[SecurityMasterRecord]:
         return [SecurityMasterRecord.model_validate(row) for row in self._scan_arrow_table(self.security_master_table).to_pylist()]

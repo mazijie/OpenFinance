@@ -33,7 +33,7 @@ def a_share_backfill_pipeline():
     @task(retries=2, retry_delay=timedelta(minutes=5), max_active_tis_per_dag=int(os.getenv("A_SHARE_MAX_ACTIVE_BATCHES", "4")))
     def ingest(batch: list[str], window: dict[str, str]) -> dict[str, object]:
         context = get_current_context()
-        idempotency_key = f"{context['run_id']}:{context['task_instance'].map_index}"
+        idempotency_key = f"{context['dag'].dag_id}:{context['run_id']}:{context['task_instance'].map_index}"
         job_id = _submit_a_share_ingestion({
             "symbols": batch,
             "start_date": f"{window['start_date']}T00:00:00+00:00",
@@ -52,6 +52,9 @@ def a_share_backfill_pipeline():
 
     @task
     def quality_check(plan: dict[str, object], window: dict[str, str], ingest_results: list[dict[str, object]], silver_stats: list[dict[str, int]]) -> dict[str, int]:
+        failed_symbols = [symbol for result in ingest_results for symbol in result.get("failed_symbols", [])]
+        if failed_symbols:
+            raise ValueError(f"A-share ingestion failed for {len(failed_symbols)} symbols; coverage will not be recorded")
         expected = len(plan["batches"])
         if len(ingest_results) != expected or len(silver_stats) != expected:
             raise ValueError("A-share batch results are incomplete; coverage will not be recorded")

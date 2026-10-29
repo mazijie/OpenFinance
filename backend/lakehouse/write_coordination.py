@@ -151,3 +151,18 @@ def upsert_with_retry(
             time.sleep(delay)
             table_loader()
     raise last_error or RuntimeError("Iceberg upsert failed")
+
+
+def coordinated_write_with_retry(operation: Callable[[], T], *, table_name: str) -> T:
+    """Retry an entire read/modify/write operation under the shared lock."""
+    max_attempts = max(1, settings.ICEBERG_WRITE_MAX_RETRIES + 1)
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with iceberg_write_lock():
+                return operation()
+        except CommitFailedException:
+            if attempt == max_attempts:
+                raise
+            delay = min(settings.ICEBERG_WRITE_MAX_BACKOFF_SECONDS, settings.ICEBERG_WRITE_INITIAL_BACKOFF_SECONDS * (2 ** (attempt - 1)))
+            time.sleep(delay * (0.75 + random.random() * 0.5))
+    raise RuntimeError(f"Iceberg write failed: {table_name}")

@@ -39,6 +39,14 @@ class FinancePipelineStats:
     def to_dict(self) -> dict[str, int]:
         return asdict(self)
 
+    def merge(self, other: "FinancePipelineStats") -> None:
+        for field_name in self.__dataclass_fields__:
+            setattr(
+                self,
+                field_name,
+                getattr(self, field_name) + getattr(other, field_name),
+            )
+
 
 class FinanceBronzeToSilverPipeline:
     """Normalize finance Bronze JSON files into Silver tables."""
@@ -48,6 +56,78 @@ class FinanceBronzeToSilverPipeline:
         self.finance_writer = finance_writer or FinanceWriter()
 
     def process_object(self, object_path: str) -> FinancePipelineStats:
+        """Normalize one object while preserving the single-object API."""
+
+        return self.process_objects([object_path])
+
+    def process_objects(self, object_paths: list[str]) -> FinancePipelineStats:
+        """Normalize a whole Bronze batch and commit each Silver table once."""
+
+        paths = list(
+            dict.fromkeys(
+                str(path).strip()
+                for path in object_paths
+                if str(path).strip()
+            )
+        )
+        if not paths:
+            raise ValueError("At least one Bronze object path is required")
+
+        stats = FinancePipelineStats()
+        security_records: list[SecurityMasterRecord] = []
+        calendar_records: list[TradingCalendarRecord] = []
+        daily_records: list[DailyBarRecord] = []
+
+        # Read and validate the complete batch before any write. A malformed
+        # object therefore fails the job without leaving a partially applied
+        # Bronze batch behind.
+        for object_path in paths:
+            object_security_records, object_calendar_records, object_daily_records, object_stats = (
+                self._normalize_object(object_path)
+            )
+            stats.merge(object_stats)
+            security_records.extend(object_security_records)
+            calendar_records.extend(object_calendar_records)
+            daily_records.extend(object_daily_records)
+
+        security_records, security_duplicates = self._deduplicate_records(
+            security_records,
+            key=lambda record: (record.provider, record.security_id),
+        )
+        calendar_records, calendar_duplicates = self._deduplicate_records(
+            calendar_records,
+            key=lambda record: (record.exchange, record.trading_date),
+        )
+        daily_records, daily_duplicates = self._deduplicate_records(
+            daily_records,
+            key=lambda record: (
+                record.provider,
+                record.adjustment_type,
+                record.security_id,
+                record.trading_date,
+            ),
+        )
+        stats.duplicate_count += security_duplicates + calendar_duplicates + daily_duplicates
+
+        stats.written_security_master = self.finance_writer.append_security_master(security_records)
+        stats.written_trading_calendar = self.finance_writer.append_trading_calendar(calendar_records)
+        stats.written_daily_bars = self.finance_writer.append_daily_bars(daily_records)
+        logger.info(
+            "Finance Bronze to Silver completed",
+            event="finance_bronze_to_silver_completed",
+            extra_fields=stats.to_dict(),
+        )
+        return stats
+
+    def _normalize_object(
+        self,
+        object_path: str,
+    ) -> tuple[
+        list[SecurityMasterRecord],
+        list[TradingCalendarRecord],
+        list[DailyBarRecord],
+        FinancePipelineStats,
+    ]:
         payload = self.bronze_writer.read_json(object_path)
         bronze_object = FinanceBronzeObject.model_validate(payload)
         stats = FinancePipelineStats(processed_objects=1)
@@ -88,30 +168,7 @@ class FinanceBronzeToSilverPipeline:
 
             daily_records.append(record)
 
-        security_records, security_duplicates = self._deduplicate_records(
-            security_records,
-            key=lambda record: (record.provider, record.security_id),
-        )
-        calendar_records, calendar_duplicates = self._deduplicate_records(
-            calendar_records,
-            key=lambda record: (record.exchange, record.trading_date),
-        )
-        daily_records, daily_duplicates = self._deduplicate_records(
-            daily_records,
-            key=lambda record: (
-                record.provider,
-                record.adjustment_type,
-                record.security_id,
-                record.trading_date,
-            ),
-        )
-        stats.duplicate_count += security_duplicates + calendar_duplicates + daily_duplicates
-
-        stats.written_security_master = self.finance_writer.append_security_master(security_records)
-        stats.written_trading_calendar = self.finance_writer.append_trading_calendar(calendar_records)
-        stats.written_daily_bars = self.finance_writer.append_daily_bars(daily_records)
-        logger.info("Finance Bronze to Silver completed", event="finance_bronze_to_silver_completed", extra_fields=stats.to_dict())
-        return stats
+        return security_records, calendar_records, daily_records, stats
 
     @staticmethod
     def _deduplicate_records(records: list[Any], *, key: Any) -> tuple[list[Any], int]:

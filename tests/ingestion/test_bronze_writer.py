@@ -43,6 +43,11 @@ class FakeMinioClient:
     def get_object(self, bucket_name: str, object_name: str) -> FakeReadResponse:
         return FakeReadResponse(self.objects[object_name])
 
+    def stat_object(self, bucket_name: str, object_name: str):
+        if object_name not in self.objects:
+            raise KeyError(object_name)
+        return object()
+
     def list_objects(self, bucket_name: str, prefix: str, recursive: bool):
         return [type("Obj", (), {"object_name": key}) for key in self.objects if key.startswith(prefix)]
 

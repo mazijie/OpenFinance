@@ -7,10 +7,13 @@ from backend.schemas.finance import DailyBarRecord, SecurityMasterRecord, Tradin
 
 
 class FakeBronzeWriter:
-    def __init__(self, payload: dict) -> None:
+    def __init__(self, payload: dict | dict[str, dict]) -> None:
         self.payload = payload
 
     def read_json(self, object_path: str) -> dict:
+        if isinstance(self.payload, dict) and object_path in self.payload:
+            return self.payload[object_path]
+        assert isinstance(self.payload, dict)
         return self.payload
 
 
@@ -19,18 +22,24 @@ class FakeFinanceWriter:
         self.security_master_records: list[SecurityMasterRecord] = []
         self.trading_calendar_records: list[TradingCalendarRecord] = []
         self.daily_bar_records: list[DailyBarRecord] = []
+        self.security_master_write_calls = 0
+        self.trading_calendar_write_calls = 0
+        self.daily_bar_write_calls = 0
 
     def append_security_master(self, records: list[SecurityMasterRecord]) -> int:
+        self.security_master_write_calls += 1
         inserted = sum(1 for record in records if record not in self.security_master_records)
         self.security_master_records.extend(records)
         return inserted
 
     def append_trading_calendar(self, records: list[TradingCalendarRecord]) -> int:
+        self.trading_calendar_write_calls += 1
         inserted = sum(1 for record in records if record not in self.trading_calendar_records)
         self.trading_calendar_records.extend(records)
         return inserted
 
     def append_daily_bars(self, records: list[DailyBarRecord]) -> int:
+        self.daily_bar_write_calls += 1
         by_key = {
             (record.provider, record.adjustment_type, record.security_id, record.trading_date): record
             for record in self.daily_bar_records
@@ -169,3 +178,30 @@ def test_finance_pipeline_is_idempotent_for_same_snapshot() -> None:
     assert first.written_daily_bars == 2
     assert second.written_daily_bars == 0
     assert second.duplicate_count == 1
+
+
+def test_finance_pipeline_commits_a_multiple_object_batch_once_per_table() -> None:
+    first_path = "finance/provider=baostock/requests/first.json"
+    second_path = "finance/provider=baostock/requests/second.json"
+    writer = FakeFinanceWriter()
+    pipeline = FinanceBronzeToSilverPipeline(
+        bronze_writer=FakeBronzeWriter(
+            {
+                first_path: _bronze_payload(),
+                second_path: _bronze_payload(),
+            }
+        ),
+        finance_writer=writer,
+    )
+
+    stats = pipeline.process_objects([first_path, second_path])
+
+    assert stats.processed_objects == 2
+    assert stats.read_count == 12
+    assert stats.duplicate_count == 6
+    assert stats.written_security_master == 1
+    assert stats.written_trading_calendar == 1
+    assert stats.written_daily_bars == 2
+    assert writer.security_master_write_calls == 1
+    assert writer.trading_calendar_write_calls == 1
+    assert writer.daily_bar_write_calls == 1

@@ -127,15 +127,20 @@ class AShareIngestionJobStore:
         keys = ("job_id", "status", "result", "error", "attempts", "created_at", "started_at", "finished_at")
         return {key: value.isoformat() if isinstance(value, datetime) else str(value) if isinstance(value, UUID) else value for key, value in zip(keys, row, strict=True)}
 
-    def claim(self, stale_after_seconds: int = 86400) -> dict[str, Any] | None:
+    def claim(self, stale_after_seconds: int | None = None) -> dict[str, Any] | None:
         self.ensure_schema()
+        resolved_stale_seconds = (
+            stale_after_seconds
+            if stale_after_seconds is not None
+            else settings.FINANCE_JOB_STALE_SECONDS
+        )
         with self._connection() as conn, conn.cursor() as cur:
             cur.execute(
                 f"""
                 WITH candidate AS (
                     SELECT job_id FROM {self.fqtn}
                     WHERE status = 'queued'
-                       OR (status = 'running' AND heartbeat_at < now() - interval '{int(stale_after_seconds)} seconds')
+                       OR (status = 'running' AND heartbeat_at < now() - interval '{int(resolved_stale_seconds)} seconds')
                     ORDER BY created_at
                     FOR UPDATE SKIP LOCKED
                     LIMIT 1

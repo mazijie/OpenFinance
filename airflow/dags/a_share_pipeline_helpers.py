@@ -107,15 +107,30 @@ def _wait_for_finance_normalization(job_id: str) -> dict[str, object]:
     timeout_seconds = int(os.getenv("A_SHARE_JOB_TIMEOUT_SECONDS", "21600"))
     poll_seconds = max(1, int(os.getenv("A_SHARE_JOB_POLL_SECONDS", "10")))
     deadline = time.monotonic() + timeout_seconds
+    last_transient_error: str | None = None
     while time.monotonic() < deadline:
         request = Request(f"{_base_url()}/internal/jobs/finance-bronze-to-silver/jobs/{job_id}", headers={"X-OpenFinance-Token": _internal_token()})
         try:
             with urlopen(request, timeout=30) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
-            raise RuntimeError(f"Finance normalization status request failed: {exc.code} {exc.read().decode('utf-8', errors='ignore')}") from exc
+            body = exc.read().decode("utf-8", errors="ignore")
+            if exc.code in {408, 429} or exc.code >= 500:
+                last_transient_error = f"{exc.code} {body}"
+                print(f"Finance normalization status poll temporarily failed; retrying: {last_transient_error}")
+                time.sleep(poll_seconds)
+                continue
+            raise RuntimeError(f"Finance normalization status request failed: {exc.code} {body}") from exc
         except URLError as exc:
-            raise RuntimeError(f"Finance normalization status request failed: {exc.reason}") from exc
+            last_transient_error = str(exc.reason)
+            print(f"Finance normalization status poll temporarily unavailable; retrying: {last_transient_error}")
+            time.sleep(poll_seconds)
+            continue
+        except (ConnectionError, TimeoutError) as exc:
+            last_transient_error = str(exc)
+            print(f"Finance normalization status poll transiently failed; retrying: {last_transient_error}")
+            time.sleep(poll_seconds)
+            continue
         state = str(payload.get("status") or "").strip().lower()
         if state == "success":
             result = payload.get("result")
@@ -123,7 +138,11 @@ def _wait_for_finance_normalization(job_id: str) -> dict[str, object]:
             return result
         if state == "failed": raise RuntimeError(f"Finance normalization job {job_id} failed: {payload.get('error') or 'unknown error'}")
         time.sleep(poll_seconds)
-    raise TimeoutError(f"Finance normalization job {job_id} did not finish within {timeout_seconds} seconds")
+    suffix = f"; last transient error: {last_transient_error}" if last_transient_error else ""
+    raise TimeoutError(
+        f"Finance normalization job {job_id} did not finish within "
+        f"{timeout_seconds} seconds{suffix}"
+    )
 
 
 def _get_a_share_symbols(adjustment_type: str) -> dict[str, object]:
@@ -196,3 +215,25 @@ def build_gap_ingest_jobs(plan: dict[str, object], batch_size: int) -> list[dict
                 }
             )
     return jobs
+
+
+def build_normalization_batches(
+    ingest_results: list[dict[str, object]],
+    batch_size: int,
+) -> list[list[str]]:
+    """Group stable Bronze object paths into bounded Iceberg commits."""
+
+    if batch_size <= 0:
+        raise ValueError("A_SHARE_NORMALIZATION_BATCH_SIZE must be positive")
+    paths = [
+        str(item["object_path"])
+        for item in ingest_results
+        if str(item.get("object_path") or "").strip()
+    ]
+    unique_paths = list(dict.fromkeys(paths))
+    if len(unique_paths) != len(ingest_results):
+        raise ValueError("Every successful ingestion batch must have one unique Bronze object")
+    return [
+        unique_paths[index:index + batch_size]
+        for index in range(0, len(unique_paths), batch_size)
+    ]

@@ -36,6 +36,7 @@ class FakeWriter:
                 exchange="SZ",
                 security_type="stock",
                 name="A",
+                list_date=date(2020, 1, 1),
                 status="active",
                 provider="baostock",
                 raw_object_path="test://a",
@@ -49,6 +50,7 @@ class FakeWriter:
                 exchange="SZ",
                 security_type="stock",
                 name="B",
+                list_date=date(2020, 1, 1),
                 status="active",
                 provider="baostock",
                 raw_object_path="test://b",
@@ -151,3 +153,31 @@ def test_gap_plan_does_not_refresh_calendar_when_closed_day_is_latest(monkeypatc
     )
 
     assert result["calendar_refresh_requests"] == 0
+
+
+def test_gap_plan_excludes_dates_before_listing(monkeypatch) -> None:
+    monkeypatch.setattr("backend.services.a_share_gap_service.settings.A_SHARE_REQUESTS_PER_SYMBOL", 2)
+    writer = FakeWriter()
+    writer.security_master[1].list_date = date(2026, 1, 6)
+    service = AShareGapService(writer=writer, provider=object(), budget_store=FakeBudget(10), universe_cache=FakeUniverseCache())
+    result = service.plan(lookback_days=1, end_date=date(2026, 1, 5))
+    assert result["status"] == "complete"
+    assert result["missing_pair_count"] == 0
+
+
+def test_incomplete_calendar_does_not_report_complete() -> None:
+    writer = FakeWriter()
+    writer.calendar = []
+    service = AShareGapService(writer=writer, provider=object(), budget_store=FakeBudget(0), universe_cache=FakeUniverseCache())
+    result = service.plan(lookback_days=1, end_date=date(2026, 1, 5))
+    assert result["status"] == "calendar_incomplete"
+    assert result["missing_calendar_days"] == 1
+
+
+def test_missing_listing_date_does_not_report_complete() -> None:
+    writer = FakeWriter()
+    writer.security_master[1].list_date = None
+    writer.actual.add(("000002.SZ", date(2026, 1, 5)))
+    service = AShareGapService(writer=writer, provider=object(), budget_store=FakeBudget(10), universe_cache=FakeUniverseCache())
+    result = service.plan(lookback_days=1, end_date=date(2026, 1, 5))
+    assert result["status"] == "metadata_incomplete"

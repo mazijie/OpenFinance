@@ -108,3 +108,61 @@ def test_ingestion_status_poll_retries_transient_connection_error(monkeypatch) -
 
     assert result == {"daily_bar_count": 1}
     assert calls == 2
+
+
+def test_build_normalization_batches_groups_unique_bronze_objects() -> None:
+    module = _load_helpers_module()
+    results = [
+        {"object_path": "finance/requests/a.json"},
+        {"object_path": "finance/requests/b.json"},
+        {"object_path": "finance/requests/c.json"},
+    ]
+
+    assert module.build_normalization_batches(results, 2) == [
+        ["finance/requests/a.json", "finance/requests/b.json"],
+        ["finance/requests/c.json"],
+    ]
+
+
+def test_build_normalization_batches_rejects_missing_object_path() -> None:
+    module = _load_helpers_module()
+
+    with pytest.raises(ValueError, match="one unique Bronze object"):
+        module.build_normalization_batches(
+            [{"object_path": "finance/requests/a.json"}, {}],
+            10,
+        )
+
+
+def test_normalization_status_poll_retries_connection_error(monkeypatch) -> None:
+    module = _load_helpers_module()
+    calls = 0
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return json.dumps(
+                {"status": "success", "result": {"processed_objects": 1}}
+            ).encode()
+
+    def fake_urlopen(request, timeout):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise URLError("connection refused")
+        return Response()
+
+    monkeypatch.setenv("OPENFINANCE_INTERNAL_API_TOKEN", "test-token")
+    monkeypatch.setenv("A_SHARE_JOB_POLL_SECONDS", "1")
+    monkeypatch.setattr(module, "urlopen", fake_urlopen)
+    monkeypatch.setattr(module.time, "sleep", lambda _: None)
+
+    result = module._wait_for_finance_normalization("job-1")
+
+    assert result == {"processed_objects": 1}
+    assert calls == 2
