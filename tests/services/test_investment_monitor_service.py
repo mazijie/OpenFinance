@@ -9,6 +9,7 @@ from backend.schemas.monitor import (
     MonitorRun,
     WatchlistItem,
 )
+from backend.schemas.harness import AgentThread
 from backend.services.investment_monitor_service import InvestmentMonitorService
 
 
@@ -94,9 +95,29 @@ class FakeAgent:
         return MonitorAgentResult(report=_report(), tool_calls=[], latency_ms=1)
 
 
+class FakeHarnessStore:
+    def get_or_create_system_thread(self, *, system_key, title):
+        now = _now()
+        return AgentThread(
+            thread_id="00000000-0000-0000-0000-000000000003",
+            title=title,
+            status="active",
+            kind="system",
+            created_at=now,
+            updated_at=now,
+        )
+
+    def append_monitor_report_message(self, *, thread_id, report):
+        return None
+
+
 def test_shadow_mode_persists_recommendations_for_evaluation() -> None:
     store = FakeStore()
-    service = InvestmentMonitorService(store=store, agent_factory=FakeAgent)
+    service = InvestmentMonitorService(
+        store=store,
+        agent_factory=FakeAgent,
+        harness_store=FakeHarnessStore(),
+    )
     from backend.schemas.monitor import MonitorRunRequest
 
     accepted = service.create_run(MonitorRunRequest(trading_date=date(2026, 10, 23)))
@@ -114,6 +135,7 @@ def test_shadow_mode_persists_recommendations_for_evaluation() -> None:
     service.execute(run)
 
     assert accepted.status == "queued"
+    assert accepted.thread_id == "00000000-0000-0000-0000-000000000003"
     assert store.reports[0].recommendation_5d is not None
     assert store.reports[0].model_metadata["shadow_mode"] is True
     assert store.finished[0] == "completed"

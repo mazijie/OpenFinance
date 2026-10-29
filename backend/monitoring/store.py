@@ -258,6 +258,7 @@ class MonitorStore:
         cutoff_at: datetime,
         watchlist_version: str,
         config: dict[str, Any],
+        origin_thread_id: str | None = None,
     ) -> tuple[MonitorRun, bool]:
         self.ensure_schema()
         run_id = uuid4()
@@ -268,6 +269,7 @@ class MonitorStore:
                     "cutoff_at": _utc(cutoff_at).isoformat(),
                     "watchlist_version": watchlist_version,
                     "config": config,
+                    "origin_thread_id": origin_thread_id,
                 }
             ).encode("utf-8")
         ).hexdigest()
@@ -275,12 +277,20 @@ class MonitorStore:
             cur.execute(
                 f"""
                 INSERT INTO {self._schema}.monitor_runs
-                    (run_id, run_key, trading_date, cutoff_at, status, watchlist_version, config)
-                VALUES (%s, %s, %s, %s, 'queued', %s, %s::jsonb)
+                    (run_id, run_key, trading_date, cutoff_at, status, watchlist_version, config, origin_thread_id)
+                VALUES (%s, %s, %s, %s, 'queued', %s, %s::jsonb, %s)
                 ON CONFLICT (run_key) DO NOTHING
                 RETURNING run_id
                 """,
-                (run_id, run_key, trading_date, _utc(cutoff_at), watchlist_version, _json(config)),
+                (
+                    run_id,
+                    run_key,
+                    trading_date,
+                    _utc(cutoff_at),
+                    watchlist_version,
+                    _json(config),
+                    UUID(origin_thread_id) if origin_thread_id else None,
+                ),
             )
             inserted = cur.fetchone()
         run = self.get_run(str(inserted[0] if inserted else self._find_run_id(run_key)))
@@ -302,7 +312,7 @@ class MonitorStore:
             cur.execute(
                 f"""
                 SELECT run_id, run_key, trading_date, cutoff_at, status, watchlist_version,
-                       config, stats, error, created_at, started_at, finished_at
+                       config, stats, error, created_at, started_at, finished_at, origin_thread_id
                 FROM {self._schema}.monitor_runs WHERE run_id = %s
                 """,
                 (UUID(run_id),),
@@ -342,7 +352,8 @@ class MonitorStore:
                 WHERE run.run_id = candidate.run_id
                 RETURNING run.run_id, run.run_key, run.trading_date, run.cutoff_at,
                           run.status, run.watchlist_version, run.config, run.stats,
-                          run.error, run.created_at, run.started_at, run.finished_at
+                          run.error, run.created_at, run.started_at, run.finished_at,
+                          run.origin_thread_id
                 """
             )
             row = cur.fetchone()
@@ -510,6 +521,7 @@ class MonitorStore:
             cutoff_at=row[3],
             status=str(row[4]),
             watchlist_version=str(row[5]),
+            origin_thread_id=str(row[12]) if row[12] else None,
             config=dict(row[6] or {}),
             stats=dict(row[7] or {}),
             error=row[8],

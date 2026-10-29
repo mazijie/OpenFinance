@@ -10,6 +10,8 @@ from uuid import uuid4
 
 from backend.agent.monitor_workflow import InvestmentMonitorAgent
 from backend.config import settings
+from backend.harness.evidence import EvidenceService
+from backend.harness.store import HarnessStore
 from backend.monitoring.store import MonitorStore
 from backend.schemas.monitor import (
     MonitorReport,
@@ -26,9 +28,13 @@ class InvestmentMonitorService:
         *,
         store: MonitorStore | None = None,
         agent_factory=None,
+        harness_store: HarnessStore | None = None,
     ) -> None:
         self.store = store or MonitorStore()
-        self.agent_factory = agent_factory or InvestmentMonitorAgent
+        self.agent_factory = agent_factory or (
+            lambda: InvestmentMonitorAgent(evidence_service=EvidenceService())
+        )
+        self.harness_store = harness_store
 
     def create_run(self, request: MonitorRunRequest) -> MonitorRunAccepted:
         items = self.store.list_watchlist(enabled_only=True)
@@ -45,22 +51,33 @@ class InvestmentMonitorService:
         trading_date = request.trading_date or now.astimezone(ZoneInfo("Asia/Shanghai")).date()
         watchlist_version = self.store.watchlist_version(items)
         previous_cutoff = self.store.latest_successful_cutoff()
+        thread_id = request.thread_id
+        if not thread_id:
+            harness_store = self.harness_store or HarnessStore()
+            thread = harness_store.get_or_create_system_thread(
+                system_key=f"monitor:{trading_date.isoformat()}",
+                title=f"{trading_date.isoformat()} 收盘监测",
+            )
+            thread_id = thread.thread_id
         config = {
             "watchlist_items": [item.model_dump(mode="json") for item in items],
             "previous_cutoff_at": previous_cutoff.isoformat() if previous_cutoff else None,
             "recommendations_enabled": settings.INVESTMENT_MONITOR_RECOMMENDATIONS_ENABLED,
             "max_symbols": settings.INVESTMENT_MONITOR_MAX_SYMBOLS,
             "concurrency": settings.INVESTMENT_MONITOR_CONCURRENCY,
+            "origin_thread_id": thread_id,
         }
         run, deduplicated = self.store.create_run(
             trading_date=trading_date,
             cutoff_at=cutoff,
             watchlist_version=watchlist_version,
             config=config,
+            origin_thread_id=thread_id,
         )
         return MonitorRunAccepted(
             run_id=run.run_id,
             status=run.status,
+            thread_id=thread_id,
             deduplicated=deduplicated,
         )
 
@@ -76,6 +93,7 @@ class InvestmentMonitorService:
         concurrency = max(1, min(int(run.config.get("concurrency", 4)), 8))
         reports: list[MonitorReport] = []
         errors: list[str] = []
+        harness_store = self.harness_store or HarnessStore()
         with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="monitor-agent") as pool:
             futures = {
                 pool.submit(
@@ -103,6 +121,11 @@ class InvestmentMonitorService:
                             }
                         )
                     self.store.upsert_report(report)
+                    if run.origin_thread_id:
+                        harness_store.append_monitor_report_message(
+                            thread_id=run.origin_thread_id,
+                            report=report.model_dump(mode="json"),
+                        )
                     self.store.save_trace(
                         run_id=run.run_id,
                         symbol=item.symbol,
@@ -127,6 +150,11 @@ class InvestmentMonitorService:
                         generated_at=datetime.now(UTC),
                     )
                     self.store.upsert_report(failed)
+                    if run.origin_thread_id:
+                        harness_store.append_monitor_report_message(
+                            thread_id=run.origin_thread_id,
+                            report=failed.model_dump(mode="json"),
+                        )
                     self.store.save_trace(
                         run_id=run.run_id,
                         symbol=item.symbol,

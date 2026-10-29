@@ -53,6 +53,7 @@ MONITOR_RUNS_TABLE = Table(
     Column("started_at", DateTime(timezone=True)),
     Column("finished_at", DateTime(timezone=True)),
     Column("heartbeat_at", DateTime(timezone=True)),
+    Column("origin_thread_id", UUID(as_uuid=True)),
 )
 
 MONITOR_REPORTS_TABLE = Table(
