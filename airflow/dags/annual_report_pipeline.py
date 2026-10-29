@@ -11,6 +11,8 @@ import pendulum
 from airflow.decorators import dag, task
 from airflow.operators.python import get_current_context
 
+from annual_report_ray_helpers import assert_annual_report_run_succeeded, collect_manifest_paths, reconcile_annual_report_index, submit_and_wait_annual_report_ray
+
 
 def _post(path: str, payload: dict[str, object]) -> object:
     base = os.getenv("OPENFINANCE_INTERNAL_API_BASE_URL", "http://backend:8000").rstrip("/")
@@ -18,7 +20,7 @@ def _post(path: str, payload: dict[str, object]) -> object:
     if not token:
         raise ValueError("OPENFINANCE_INTERNAL_API_TOKEN is not configured")
     request = Request(f"{base}{path}", data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json", "X-OpenFinance-Token": token}, method="POST")
-    with urlopen(request, timeout=300) as response:
+    with urlopen(request, timeout=int(os.getenv("PDF_PARSER_TIMEOUT_SECONDS", "14400"))) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -29,11 +31,11 @@ def _post(path: str, payload: dict[str, object]) -> object:
     start_date=pendulum.datetime(2026, 8, 1, tz="UTC"),
     catchup=False,
     max_active_runs=1,
-    default_args={"owner": "openfinance", "retries": 0, "retry_delay": timedelta(minutes=10)},
+    default_args={"owner": "openfinance", "retries": 2, "retry_delay": timedelta(minutes=10), "retry_exponential_backoff": True},
     tags=["openfinance", "annual-report", "cninfo", "rag"],
 )
 def annual_report_pipeline():
-    @task
+    @task(retries=2, retry_exponential_backoff=True)
     def ingest() -> list[dict[str, object]]:
         context = get_current_context()
         dag_run = context.get("dag_run")
@@ -45,21 +47,26 @@ def annual_report_pipeline():
         return _post("/internal/jobs/ingest-annual-reports", {"stocks": stocks, "years": years})
 
     @task
-    def normalize(results: list[dict[str, object]]) -> dict[str, int]:
-        paths: list[str] = []
-        for result in results:
-            if int(result.get("failed_count", 0)) > 0 or int(result.get("discovered_count", 0)) != int(result.get("written_count", 0)):
-                raise ValueError(f"Annual-report ingestion was incomplete: {result}")
-            paths.extend(str(path) for path in (result.get("manifest_paths") or []))
-        return _post("/internal/jobs/annual-reports-bronze-to-silver", {"object_paths": paths})
+    def manifests(results: list[dict[str, object]]) -> list[str]:
+        return collect_manifest_paths([results])
 
-    @task
-    def index(stats: dict[str, int]) -> dict[str, int]:
-        if not stats.get("written_reports"):
-            return {"written_chunks": 0}
-        return _post("/internal/jobs/annual-reports-rag-index", {"rebuild_all": False})
+    @task(retries=2, retry_exponential_backoff=True, execution_timeout=timedelta(hours=4))
+    def ray_replay(manifest_paths: list[str]) -> dict[str, object]:
+        return submit_and_wait_annual_report_ray(manifest_paths, force=False)
 
-    index(normalize(ingest()))
+    @task(trigger_rule="all_done", retries=2, retry_exponential_backoff=True)
+    def chunk_index() -> dict[str, int]:
+        # A retry still indexes when Silver contains no newly written chunks.
+        return reconcile_annual_report_index()
+
+    @task(trigger_rule="all_done")
+    def final_status() -> None:
+        assert_annual_report_run_succeeded(get_current_context())
+
+    replay = ray_replay(manifests(ingest()))
+    indexed = chunk_index()
+    replay >> indexed
+    indexed >> final_status()
 
 
 annual_report_pipeline()

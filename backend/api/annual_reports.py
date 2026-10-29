@@ -7,7 +7,7 @@ from functools import lru_cache
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from backend.ingestion.writers.bronze_writer import BronzeWriterError
-from backend.schemas.annual_report import AnnualReportPage, AnnualReportPageResult
+from backend.schemas.annual_report import AnnualReportPage, AnnualReportPageResult, AnnualReportRegion
 from backend.services.annual_report_service import AnnualReportService
 
 router = APIRouter(prefix="/api/reports", tags=["annual-reports"])
@@ -53,3 +53,11 @@ def download_report(report_id: str, service: AnnualReportService = Depends(get_a
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except BronzeWriterError as exc:
         raise HTTPException(status_code=502, detail="Failed to read annual report from object storage") from exc
+
+
+@router.get("/{report_id}/regions/{region_id}", response_model=AnnualReportRegion)
+def get_report_region(report_id: str, region_id: str, service: AnnualReportService = Depends(get_annual_report_service)) -> AnnualReportRegion:
+    try:
+        return service.get_region(report_id, region_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

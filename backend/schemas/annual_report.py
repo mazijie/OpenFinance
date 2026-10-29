@@ -3,9 +3,20 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+AnnualReportPageType = Literal["text", "scan", "mixed", "complex"]
+AnnualReportRegionType = Literal[
+    "heading",
+    "paragraph",
+    "table",
+    "figure",
+    "formula",
+    "footnote",
+]
 
 
 class AnnualReportAnnouncement(BaseModel):
@@ -44,65 +55,139 @@ class AnnualReportBronzeObject(BaseModel):
     extraction_status: str = "pending"
 
 
-class AnnualReportRecord(BaseModel):
-    """Silver annual-report document record."""
+class AnnualReportParseResult(BaseModel):
+    manifest_path: str = Field(min_length=1)
+    parse_run_id: str = Field(min_length=1)
+    report_id: str = Field(min_length=1)
+    status: Literal["succeeded", "partial"]
+    ir_object_path: str = Field(min_length=1)
+    quality_object_path: str = Field(min_length=1)
+    page_count: int = Field(ge=1)
+    needs_review_pages: list[int]
+    force: bool = False
 
-    report_id: str
-    stock_code: str
-    exchange: str
+
+class AnnualReportSilverRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class AnnualReportRecord(AnnualReportSilverRecord):
+    """Minimal Silver annual-report document record."""
+
+    report_id: str = Field(min_length=1)
+    stock_code: str = Field(min_length=1)
+    exchange: str = Field(min_length=1)
     company_name: str | None = None
     report_year: int
-    announcement_id: str
-    title: str
+    announcement_id: str = Field(min_length=1)
+    title: str = Field(min_length=1)
     announcement_time: datetime
-    pdf_url: str
-    is_canonical: bool = True
-    version_type: str = "original"
-    pdf_sha256: str
-    pdf_size: int
-    page_count: int = 0
-    extraction_status: str = "pending"
-    raw_object_path: str
-    pdf_object_path: str
+    pdf_sha256: str = Field(min_length=1)
+    page_count: int
+    extraction_status: str
+    pdf_object_path: str = Field(min_length=1)
+    parse_run_id: str = Field(min_length=1)
     ingested_at: datetime
 
 
-class AnnualReportPageRecord(BaseModel):
-    """Extracted text for one PDF page."""
+class AnnualReportPageRecord(AnnualReportSilverRecord):
+    """Minimal Silver page record."""
 
-    report_id: str
-    stock_code: str
-    report_year: int
-    page_number: int
+    report_id: str = Field(min_length=1)
+    parse_run_id: str = Field(min_length=1)
+    page_number: int = Field(ge=1)
+    page_type: AnnualReportPageType
     text: str
-    text_sha256: str
-    char_count: int
-    extraction_method: str = "pymupdf"
-    extraction_status: str = "ok"
+    extraction_method: str = Field(min_length=1)
+    extraction_status: str
+    ir_page_path: str | None = None
+
+    @model_validator(mode="after")
+    def require_review_for_empty_page(self) -> "AnnualReportPageRecord":
+        if not self.text.strip() and self.extraction_status == "ok":
+            raise ValueError("An empty annual-report page cannot have extraction_status=ok")
+        return self
 
 
-class AnnualReportSectionRecord(BaseModel):
-    """A logical section spanning one or more report pages."""
+class AnnualReportSectionRecord(AnnualReportSilverRecord):
+    """Minimal Silver section record."""
 
-    section_id: str
-    report_id: str
-    stock_code: str
-    report_year: int
-    section_title: str
-    section_path: str
+    section_id: str = Field(min_length=1)
+    report_id: str = Field(min_length=1)
+    parse_run_id: str = Field(min_length=1)
+    section_title: str = Field(min_length=1)
+    section_path: str = Field(min_length=1)
+    level: int
+    parent_section_id: str | None = None
     start_page: int
     end_page: int
-    text: str
     section_order: int
+
+
+class AnnualReportParseRunRecord(AnnualReportSilverRecord):
+    """Minimal Silver record for one parser execution."""
+
+    parse_run_id: str = Field(min_length=1)
+    report_id: str = Field(min_length=1)
+    pdf_sha256: str = Field(min_length=1)
+    parser_version: str = Field(min_length=1)
+    status: str
+    started_at: datetime
+    finished_at: datetime | None = None
+    ir_object_path: str = Field(min_length=1)
+
+
+class AnnualReportRegionRecord(AnnualReportSilverRecord):
+    """Minimal locator for a page region; detailed IR stays in MinIO."""
+
+    region_id: str = Field(min_length=1)
+    report_id: str = Field(min_length=1)
+    parse_run_id: str = Field(min_length=1)
+    page_number: int = Field(ge=1)
+    region_type: AnnualReportRegionType
+    bbox: list[float] = Field(min_length=4, max_length=4)
+    reading_order: int
+    text: str
+    content_ref: str | None = None
+
+
+class AnnualReportChunkRecord(AnnualReportSilverRecord):
+    """Canonical chunk manifest before vector indexing."""
+
+    chunk_id: str = Field(min_length=1)
+    report_id: str = Field(min_length=1)
+    parse_run_id: str = Field(min_length=1)
+    section_path: str = Field(min_length=1)
+    content_type: AnnualReportRegionType
+    page_start: int = Field(ge=1)
+    page_end: int = Field(ge=1)
+    region_ids: list[str] = Field(min_length=1)
+    chunk_text: str = Field(min_length=1)
+    content_hash: str = Field(min_length=1)
 
 
 class AnnualReportPage(BaseModel):
     """Page returned by the serving API."""
 
     report_id: str
-    page_number: int
+    page_number: int = Field(ge=1)
     text: str
     extraction_status: str
+    page_type: AnnualReportPageType
+    ir_page_path: str | None = None
+
+
+class AnnualReportRegion(BaseModel):
+    """Region locator returned by the serving API."""
+
+    region_id: str
+    report_id: str
+    page_number: int = Field(ge=1)
+    region_type: str
+    bbox: list[float] = Field(min_length=4, max_length=4)
+    reading_order: int
+    text: str
+    content_ref: str | None = None
 
 
 class AnnualReportItem(BaseModel):
@@ -116,9 +201,7 @@ class AnnualReportItem(BaseModel):
     announcement_id: str
     title: str
     announcement_time: datetime
-    pdf_url: str
-    is_canonical: bool
-    version_type: str
+    pdf_url: str | None = None
     page_count: int
     extraction_status: str
 
@@ -140,13 +223,17 @@ class AnnualReportSearchHit(BaseModel):
     report_year: int
     company_name: str | None = None
     section_path: str
-    page_start: int
-    page_end: int
+    page_start: int = Field(ge=1)
+    page_end: int = Field(ge=1)
     chunk_text: str
-    announcement_time: datetime | None = None
-    ingested_at: datetime | None = None
+    parse_run_id: str
+    content_type: AnnualReportRegionType
+    region_ids: list[str] = Field(min_length=1)
+    announcement_time: datetime
+    ingested_at: datetime
     similarity: float = 0.0
     lexical_score: float | None = None
     rrf_score: float | None = None
     rerank_score: float | None = None
+    final_score: float | None = None
     embedding: list[float] | None = Field(default=None, exclude=True)

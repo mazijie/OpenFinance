@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+minio
+PyMuPDF
+pdfplumber
+paddleocr[doc-parser]==3.3.2
+numpy
+beautifulsoup4
