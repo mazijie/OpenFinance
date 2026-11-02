@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime
 from typing import Any, Callable, Iterator
 from uuid import UUID, uuid4
@@ -58,8 +58,8 @@ class HarnessStore:
         finally:
             conn.close()
 
-    def ensure_schema(self) -> None:
-        with self._connection() as conn, conn.cursor() as cur:
+    def ensure_schema(self, connection=None) -> None:
+        with (nullcontext(connection) if connection is not None else self._connection()) as conn, conn.cursor() as cur:
             cur.execute(f"CREATE SCHEMA IF NOT EXISTS {self._schema}")
             cur.execute(
                 f"""

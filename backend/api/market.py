@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 from functools import lru_cache
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from backend.schemas.finance import AdjustmentType, MarketSearchResult, SecurityOptionsResult
 from backend.services.finance_service import FinanceService
@@ -29,17 +30,54 @@ def list_securities(
     return finance_service.list_security_options()
 
 
+@router.get("/history")
+def market_history(
+    request: Request,
+    symbol: str = Query(min_length=1, max_length=16),
+    period: Literal["daily", "weekly", "monthly"] = "daily",
+    before: date | None = None,
+    adjustment_type: AdjustmentType = "qfq",
+    finance_service: FinanceService = Depends(get_finance_service),
+):
+    if "as_of" in request.query_params:
+        raise HTTPException(status_code=422, detail="as_of is no longer supported")
+    now = datetime.now(UTC)
+    today = now.astimezone(timezone(timedelta(hours=8))).date()
+    if before and (before > today or before <= date(1901, 1, 1)):
+        raise HTTPException(status_code=422, detail="before is outside the supported date range")
+    if before and ((period == "weekly" and before.weekday() != 0) or (period == "monthly" and before.day != 1)):
+        raise HTTPException(status_code=422, detail="before must align with the period boundary")
+    end = before - timedelta(days=1) if before else today
+    start = end - timedelta(days={"daily": 365, "weekly": 1095, "monthly": 1826}[period] - 1)
+    if period == "weekly":
+        start -= timedelta(days=start.weekday())
+    elif period == "monthly":
+        start = start.replace(day=1)
+    symbol = symbol.strip().upper()
+    try:
+        result = finance_service.search_market(symbol=symbol, start_date=start, end_date=end,
+                                               adjustment_type=adjustment_type, as_of=now)
+        has_more = finance_service.has_history_before(symbol, adjustment_type, start, now)
+        return {"items": result.items, "start_date": start, "end_date": end,
+                "next_before": start, "has_more": has_more}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to query market history: {exc}") from exc
+
+
 @router.get("", response_model=MarketSearchResult, status_code=status.HTTP_200_OK)
 def get_market(
+    request: Request,
     symbol: str | None = Query(default=None, min_length=1, max_length=16),
     security_id: str | None = Query(default=None, min_length=1, max_length=64),
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
     adjustment_type: AdjustmentType = Query(default="qfq"),
-    as_of: datetime | None = Query(default=None),
     finance_service: FinanceService = Depends(get_finance_service),
 ) -> MarketSearchResult:
     """Query Silver/Gold market data without contacting an external provider."""
+
+    if "as_of" in request.query_params:
+        raise HTTPException(status_code=422, detail="as_of is no longer supported")
 
     if not symbol and not security_id:
         raise HTTPException(status_code=422, detail="symbol or security_id is required")
@@ -56,7 +94,6 @@ def get_market(
             start_date=resolved_start,
             end_date=resolved_end,
             adjustment_type=adjustment_type,
-            as_of=as_of,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

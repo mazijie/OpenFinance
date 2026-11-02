@@ -80,6 +80,9 @@ class EvidenceService:
                 source = jobs[future]
                 try:
                     source_documents = future.result()
+                    if source == "news" and isinstance(source_documents, tuple):
+                        source_documents, warnings = source_documents
+                        missing.extend(f"news: {warning}" for warning in warnings)
                     source_document_counts[source] = len(source_documents)
                     documents.extend(source_documents)
                 except Exception as exc:
@@ -153,7 +156,7 @@ class EvidenceService:
             )
         ]
 
-    def _news(self, query: str, symbol: str | None, start: datetime, end: datetime, cutoff: datetime, limit: int) -> list[EvidenceDocument]:
+    def _news(self, query: str, symbol: str | None, start: datetime, end: datetime, cutoff: datetime, limit: int) -> tuple[list[EvidenceDocument], list[str]]:
         result = self.news_search(
             question=query,
             symbol=symbol,
@@ -164,7 +167,7 @@ class EvidenceService:
         )
         data = result.get("data") or {}
         if not result.get("success") or data.get("error_stage"):
-            return []
+            raise RuntimeError(data.get("message") or result.get("error") or "新闻检索不可用")
         documents: list[EvidenceDocument] = []
         for article in data.get("articles") or []:
             chunks = article.get("evidence_chunks") or []
@@ -186,7 +189,7 @@ class EvidenceService:
                     metadata={"provider": article.get("provider"), "source_name": article.get("source_name")},
                 )
             )
-        return documents
+        return documents, list(data.get("warnings") or [])
 
     def _annual(
         self,

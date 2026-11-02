@@ -145,8 +145,9 @@ def _wait_for_finance_normalization(job_id: str) -> dict[str, object]:
     )
 
 
-def _get_a_share_symbols(adjustment_type: str) -> dict[str, object]:
-    url = f"{_base_url()}/internal/jobs/list-a-share-symbols?{urlencode({'adjustment_type': adjustment_type})}"
+def _get_a_share_symbols(adjustment_type: str, *, ignore_coverage: bool = False) -> dict[str, object]:
+    params = {"adjustment_type": adjustment_type, "ignore_coverage": str(ignore_coverage).lower()}
+    url = f"{_base_url()}/internal/jobs/list-a-share-symbols?{urlencode(params)}"
     print(f"Requesting A-share universe from {url}")
     request = Request(url, headers={"X-OpenFinance-Token": _internal_token()})
     try:

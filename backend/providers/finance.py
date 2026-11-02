@@ -104,10 +104,11 @@ class BaoStockFinanceProvider(BaseFinanceProvider):
         day: date | None = None,
         coverage_store: Any | None = None,
         adjustment_type: str = "qfq",
+        ignore_coverage: bool = False,
     ) -> AShareUniverseResult:
         """Find a listed A-share universe, stopping at a completed coverage date."""
 
-        if coverage_store is None:
+        if coverage_store is None and not ignore_coverage:
             from backend.lakehouse.a_share_coverage import AShareCoverageStore
 
             coverage_store = AShareCoverageStore()
@@ -116,7 +117,7 @@ class BaoStockFinanceProvider(BaseFinanceProvider):
         if max_days <= 0:
             raise FinanceProviderError("A_SHARE_UNIVERSE_LOOKBACK_DAYS must be positive")
         for _ in range(max_days):
-            if coverage_store.is_covered(
+            if not ignore_coverage and coverage_store.is_covered(
                 provider=settings.FINANCE_DEFAULT_PROVIDER,
                 adjustment_type=adjustment_type,
                 universe_as_of_date=candidate,
@@ -180,7 +181,10 @@ class BaoStockFinanceProvider(BaseFinanceProvider):
         records: list[TradingCalendarRecord] = []
         for row in rows:
             trading_date = self._coerce_date(row["calendar_date"])
-            is_open = str(row.get("is_trading_day") or "0") == "1"
+            raw_status = str(row.get("is_trading_day") or "").strip()
+            if raw_status not in {"0", "1"}:
+                raise FinanceProviderError(f"Invalid BaoStock trading-day status for {trading_date}")
+            is_open = raw_status == "1"
             session_open_at = None
             session_close_at = None
             if is_open:

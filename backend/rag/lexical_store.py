@@ -61,6 +61,20 @@ class OpenSearchNewsStore:
             self._raise(response, "checking lexical index")
         return {str(item["_source"]["content_hash"]) for item in response.json().get("hits", {}).get("hits", [])}
 
+    def existing_chunk_ids(self, chunk_ids: list[str]) -> set[str]:
+        if not self.enabled:
+            return set()
+        found = set()
+        for start in range(0, len(chunk_ids), 500):
+            response = self.client.post(f"{self.url}/{self.index}/_mget", json={"ids": chunk_ids[start:start + 500]})
+            if response.status_code >= 300:
+                self._raise(response, "checking lexical chunks")
+            docs = response.json().get("docs", [])
+            if any(doc.get("error") for doc in docs):
+                raise LexicalStoreError("OpenSearch returned errors while checking lexical chunks")
+            found.update(str(doc["_id"]) for doc in docs if doc.get("found"))
+        return found
+
     def clear(self) -> None:
         if self.enabled:
             response = self.client.delete(f"{self.url}/{self.index}")

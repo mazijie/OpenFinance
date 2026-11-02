@@ -17,6 +17,7 @@ depends_on = None
 
 def upgrade() -> None:
     bind = op.get_bind()
+    op.execute("CREATE SCHEMA IF NOT EXISTS openfinance")
     MONITOR_METADATA.create_all(bind=bind)
 
 

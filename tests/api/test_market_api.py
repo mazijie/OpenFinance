@@ -64,7 +64,6 @@ def test_market_api_forwards_query_and_returns_summary() -> None:
                 "start_date": "2026-07-01",
                 "end_date": "2026-07-31",
                 "adjustment_type": "qfq",
-                "as_of": "2026-08-03T08:00:00Z",
             },
         )
     finally:
@@ -74,7 +73,7 @@ def test_market_api_forwards_query_and_returns_summary() -> None:
     assert response.json()["items"][0]["symbol"] == "600519.SH"
     assert service.calls[0]["symbol"] == "600519.SH"
     assert service.calls[0]["start_date"] == date(2026, 7, 1)
-    assert service.calls[0]["as_of"] == datetime(2026, 8, 3, 8, 0, tzinfo=UTC)
+    assert "as_of" not in service.calls[0]
 
 
 def test_market_api_returns_explicit_empty_result() -> None:
@@ -113,5 +112,26 @@ def test_market_api_validates_selector_and_date_range() -> None:
         assert client.get("/api/market").status_code == 422
         assert client.get("/api/market", params={"symbol": "600519.SH", "start_date": "2026-08-03", "end_date": "2026-07-01"}).status_code == 422
         assert client.get("/api/market", params={"symbol": "600519.SH", "adjustment_type": "bad"}).status_code == 422
+        assert client.get("/api/market", params={"symbol": "600519.SH", "as_of": "2026-08-03T08:00:00Z"}).status_code == 422
+        assert client.get("/api/market/history", params={"symbol": "600519.SH", "as_of": "2026-08-03T08:00:00Z"}).status_code == 422
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_history_pages_align_to_period_and_preserve_empty_gap() -> None:
+    service = FakeFinanceService(MarketSearchResult(items=[]))
+    service.has_history_before = lambda symbol, adjustment_type, before, as_of: True
+    app.dependency_overrides[get_finance_service] = lambda: service
+    try:
+        client = TestClient(app)
+        response = client.get("/api/market/history", params={"symbol": "600519.SH", "period": "weekly", "before": "2026-08-03"})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["items"] == [] and data["has_more"] is True
+        assert date.fromisoformat(data["start_date"]).weekday() == 0
+        assert data["end_date"] == "2026-08-02"
+        response = client.get("/api/market/history", params={"symbol": "600519.SH", "period": "monthly", "before": "2026-08-01"})
+        assert response.json()["start_date"].endswith("-01")
+        assert response.json()["end_date"] == "2026-07-31"
     finally:
         app.dependency_overrides.clear()

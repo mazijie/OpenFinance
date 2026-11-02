@@ -3,6 +3,17 @@
 本文记录 OpenFinance-Agent 接入 Spark 学习链路时遇到的工程问题。
 每次新增记录应包含日期、现象、根因、处理方式和验证结果。
 
+## 2026-10-30：Spark 服务停止与历史记录
+
+- 原 Master 和 Worker 在 2026-10-26 15:08（北京时间）先后收到 TERM。
+  Master 退出码 143，Worker 退出码 137；Docker 对两者均记录
+  `OOMKilled=false`。现有 Docker 事件不足以确定信号来源或 Worker 强制退出原因。
+- 原服务没有重启策略且属于 `spark` profile，普通启动不会重新拉起它们。
+- 已加入 History Server、共享事件日志及自动重启配置；历史事件日志仅覆盖
+  启用记录后启动的应用。
+- 实施时 Compose 重建了原 Master 和 Worker 容器；原容器的 Docker 日志
+  因而不再保留。上述诊断信息来自重建前的检查。
+
 ## 2026-10-25：Docker Hub 拉取 Spark 镜像超时
 
 **现象**

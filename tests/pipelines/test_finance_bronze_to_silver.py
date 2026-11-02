@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import pytest
 
 from backend.pipelines.finance_bronze_to_silver import FinanceBronzeToSilverPipeline
 from backend.schemas.finance import DailyBarRecord, SecurityMasterRecord, TradingCalendarRecord
+from backend.lakehouse.job_lease import JobLeaseLost
 
 
 class FakeBronzeWriter:
@@ -60,6 +62,22 @@ class FakeFinanceWriter:
             for record in self.daily_bar_records
             if (record.provider, record.adjustment_type, record.security_id, record.trading_date) in wanted
         }
+
+
+def test_lease_loss_stops_subsequent_silver_writes():
+    writer = FakeFinanceWriter()
+    pipeline = FinanceBronzeToSilverPipeline(bronze_writer=FakeBronzeWriter(_bronze_payload()), finance_writer=writer)
+    checks = 0
+    def guard():
+        nonlocal checks
+        checks += 1
+        if checks == 3:
+            raise JobLeaseLost("lease lost")
+    with pytest.raises(JobLeaseLost):
+        pipeline.process_objects(["object"], check_lease=guard)
+    assert writer.security_master_write_calls == 1
+    assert writer.trading_calendar_write_calls == 0
+    assert writer.daily_bar_write_calls == 0
 
 
 def _bronze_payload() -> dict:

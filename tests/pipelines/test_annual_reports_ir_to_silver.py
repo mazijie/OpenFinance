@@ -137,6 +137,36 @@ def test_failed_silver_write_does_not_commit_run_and_retry_can_complete():
     assert len(writer.events) == event_count
 
 
+def test_forced_projection_uses_new_committed_version():
+    writer = Writer()
+    job = pipeline(writer=writer)
+    assert job.run([result()]).written_reports == 1
+    forced = {**result(), "force": True}
+    assert job.run([forced]).written_reports == 1
+    assert len(writer.runs) == 2
+    assert writer.runs[0].parse_run_id != writer.runs[1].parse_run_id
+    assert job.run([forced]).written_reports == 0
+
+
+@pytest.mark.parametrize("method", ["append_pages", "append_regions", "append_sections", "append_chunks", "append_report"])
+def test_failed_forced_projection_keeps_previous_commit(method):
+    writer = Writer()
+    job = pipeline(writer=writer)
+    job.process_result(result())
+    previous_run = writer.runs[0].parse_run_id
+    original = getattr(writer, method)
+    def fail_after_write(*args):
+        original(*args)
+        raise RuntimeError("injected write failure")
+    setattr(writer, method, fail_after_write)
+    with pytest.raises(RuntimeError, match="injected"):
+        job.process_result({**result(), "force": True})
+    assert [run.parse_run_id for run in writer.runs] == [previous_run]
+    setattr(writer, method, original)
+    job.process_result({**result(), "force": True})
+    assert len(writer.runs) == 2
+
+
 def test_empty_page_requires_review_status():
     page = {'report_id': REPORT, 'parse_run_id': 'run-1', 'page_number': 1, 'page_type': 'scan', 'text': '', 'extraction_method': 'paddleocr_pp_structurev3', 'extraction_status': 'ok'}
     with pytest.raises(ValidationError, match='cannot have extraction_status=ok'):

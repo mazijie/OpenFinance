@@ -87,6 +87,7 @@ def test_ingest_a_share_daily_bars_writes_bronze_payload() -> None:
     )
 
     assert result.daily_bar_count == 1
+    assert result.no_data_symbols == []
     assert writer.calls[0]["provider"] == "baostock"
     assert writer.calls[0]["raw_response"]["security_master"][0]["symbol"] == "600519.SH"
 
@@ -126,4 +127,5 @@ def test_ingest_a_share_daily_bars_retries_one_symbol(monkeypatch) -> None:
 
     assert provider.daily_calls == 2
     assert result.processed_symbol_count == 1
+    assert result.no_data_symbols == ["600519.SH"]
     assert writer.calls[0]["raw_response"]["daily_bars"] == []

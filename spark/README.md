@@ -1,9 +1,8 @@
-# Spark 学习实验室
+# Spark 作业指南
 
-这条学习链路与现有后端查询链路隔离。目标是使用项目真实的数据形态练习
-Spark DataFrame、Spark SQL、Iceberg 和 Airflow，而不是只做教程示例。
+Spark 作业覆盖行情数据转换、窗口指标计算、Iceberg 表维护及 Airflow 调度。
 
-## 当前实验：Bronze 行情 JSON → Parquet
+## Bronze 行情 JSON → Parquet
 
 输入是带嵌套结构的 Bronze JSON：
 
@@ -28,7 +27,7 @@ Spark 作业依次完成：
 先启动 Docker Desktop，然后在项目根目录执行：
 
 ```powershell
-docker compose --profile spark up -d spark-master spark-worker
+docker compose up -d spark-master spark-worker spark-history-server
 ```
 
 默认使用国内镜像源：
@@ -38,17 +37,17 @@ docker.1ms.run/apache/spark:4.1.2-python3
 ```
 
 当前固定版本是 Spark 4.1.2 / Python 3.10，镜像不存在时才会拉取。
-Spark 学习镜像会在此基础上加入 Iceberg、AWS S3FileIO 和 PostgreSQL JDBC：
+Spark 镜像会在此基础上加入 Iceberg、AWS S3FileIO 和 PostgreSQL JDBC：
 
 ```powershell
-docker compose --profile spark build spark-master spark-worker
+docker compose build spark-master spark-worker
 ```
 
 如需切换基础镜像站，可以设置 `SPARK_BASE_IMAGE`：
 
 ```powershell
 $env:SPARK_BASE_IMAGE = "hub.rat.dev/apache/spark:4.1.2-python3"
-docker compose --profile spark build spark-master spark-worker
+docker compose build spark-master spark-worker
 ```
 
 如果本机已有同一镜像的本地别名，可以避免重新下载：
@@ -71,9 +70,28 @@ http://localhost:8082
 
 Spark 使用项目根目录的 Compose project 和默认网络，因此后续作业可以通过
 `minio:9000`、`postgres:5432` 等 Compose 服务名访问项目已有组件。通过
-`spark` profile 隔离，普通的 `docker compose up -d` 不会启动 Spark。
+普通的 `docker compose up -d` 会启动 Spark。服务使用 `unless-stopped` 自动重启；
+手动停止的服务需手动启动。Worker 依赖 Master 的启动顺序，但不保证 Master
+已经准备好接受连接。
 
-## 运行第一课
+## History Server
+
+访问 http://localhost:18080 查看已完成应用的 Jobs、Stages 和 SQL 页面。
+应用事件日志保存在 `.cache/spark/events`，容器重建后仍保留；请根据磁盘容量
+定期管理该目录。启用事件日志前结束的应用无法恢复历史页面。该目录依赖单机
+共享挂载；跨主机部署需改用共享存储。History Server 仅绑定本机回环地址。
+History Server 以 root 读取不同用户创建的事件日志，其项目挂载为只读。
+
+普通 Spark 容器提交使用 `spark-defaults.conf`；显式使用 Iceberg 属性文件
+的提交（包括 Airflow Gold 作业）使用 `iceberg.properties` 中的相同设置。
+自定义 `--properties-file` 时也须加入 `spark.eventLog.enabled=true` 和
+`spark.eventLog.dir=file:/opt/openfinance/.cache/spark/events`。
+
+页面为空时，检查作业启动时的事件日志配置、共享目录的写入和读取权限，
+并通过 `docker compose logs spark-history-server` 查看服务日志。日志扫描
+可能有短暂延迟。History Server 展示 Spark 事件，不替代容器标准输出日志。
+
+## 运行数据转换
 
 ```powershell
 docker compose exec spark-master `
@@ -84,10 +102,10 @@ docker compose exec spark-master `
   --output /opt/openfinance/.cache/spark/bronze_finance_sample
 ```
 
-只停止 Spark 学习服务：
+只停止 Spark 服务：
 
 ```powershell
-docker compose --profile spark stop spark-master spark-worker
+docker compose stop spark-master spark-worker spark-history-server
 ```
 
 预期结果：
@@ -101,7 +119,7 @@ docker compose --profile spark stop spark-master spark-worker
 }
 ```
 
-## 第一课要观察什么
+## 数据转换观测
 
 - `read_bronze` 只构造执行计划，`raw_count` 的聚合才触发第一个 Job。
 - `explode` 会把一行 Bronze 对象展开成多行行情。
@@ -111,7 +129,7 @@ docker compose --profile spark stop spark-master spark-worker
 
 建议在 Spark UI 的 Jobs、Stages 和 SQL 页面各停留一次，确认最耗时的 Stage。
 
-## 第二课：窗口指标
+## 窗口指标
 
 生成 25 个交易日的确定性样例：
 
@@ -182,7 +200,7 @@ docker compose exec spark-master `
   -e "SHOW TABLES IN openfinance.openfinance"
 ```
 
-直接对真实 Silver 行情计算指标并写出学习结果：
+直接对真实 Silver 行情计算指标并写出计算结果：
 
 ```powershell
 docker compose exec spark-master `
@@ -195,8 +213,8 @@ docker compose exec spark-master `
   --output /opt/openfinance/.cache/spark/real_daily_metrics
 ```
 
-`start-date` 和 `end-date` 会下推到 Iceberg 分区扫描，避免为了练习指标
-读取全部历史。生产学习作业应先复权口径、证券范围和日期窗口做过滤。
+`start-date` 和 `end-date` 会下推到 Iceberg 分区扫描，避免为了计算指标
+读取全部历史。作业应先复权口径、证券范围和日期窗口做过滤。
 
 ## 构建 Gold 指标表
 

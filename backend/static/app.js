@@ -13,19 +13,23 @@ let chatElapsed = null;
 
 const marketForm = document.querySelector("#marketForm");
 const symbolInput = document.querySelector("#symbolInput");
-const startDateInput = document.querySelector("#startDateInput");
-const endDateInput = document.querySelector("#endDateInput");
-const adjustmentInput = document.querySelector("#adjustmentInput");
-const asOfInput = document.querySelector("#asOfInput");
+const securitySearch = document.querySelector("#securitySearch");
+const securityResults = document.querySelector("#securityResults");
+const MARKET_ADJUSTMENT = "qfq";
 const marketMessage = document.querySelector("#marketMessage");
-const marketStats = document.querySelector("#marketStats");
+const stockLastPrice = document.querySelector("#stockLastPrice");
+const stockChangePercent = document.querySelector("#stockChangePercent");
+const stockPreviousClose = document.querySelector("#stockPreviousClose");
+const stockPriceTime = document.querySelector("#stockPriceTime");
+const stockVolume = document.querySelector("#stockVolume");
+const stockMarketCap = document.querySelector("#stockMarketCap");
+const stockPe = document.querySelector("#stockPe");
 const marketChart = document.querySelector("#marketChart");
 const chartEmpty = document.querySelector("#chartEmpty");
 const chartSubtitle = document.querySelector("#chartSubtitle");
 const marketSourceBadge = document.querySelector("#marketSourceBadge");
-const lineageStrip = document.querySelector("#lineageStrip");
-const barsTableBody = document.querySelector("#barsTableBody");
-const barCount = document.querySelector("#barCount");
+const historyStatus = document.querySelector("#historyStatus");
+const loadOlderButton = document.querySelector("#loadOlderButton");
 
 const newsList = document.querySelector("#newsList");
 const newsSummary = document.querySelector("#newsSummary");
@@ -92,6 +96,21 @@ const state = {
   marketRequestId: 0,
   marketAbortController: null,
   chart: null,
+  marketPeriod: "daily",
+  marketSummary: null,
+  intradayRequestId: 0,
+  historyBars: [],
+  historyBefore: null,
+  historyHasMore: false,
+  historyLoading: false,
+  historyFailed: false,
+  historySymbol: null,
+  liveQuote: null,
+  lastProvisionalDate: null,
+  lastReconcileAt: 0,
+  reconciling: false,
+  historyReady: false,
+  securities: [],
   agentThreads: [],
   agentThreadId: null,
   agentTurnId: null,
@@ -109,14 +128,20 @@ async function loadSecurityOptions() {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.detail || "证券列表加载失败");
     const items = payload.items || [];
+    state.securities = items;
+    securitySearch.disabled = false;
+    securitySearch.placeholder = items.length ? "输入股票名称或代码" : "暂无可用证券";
     symbolInput.innerHTML = items.length
-      ? items.map((item) => `<option value="${escapeHtml(item.symbol)}">${escapeHtml(item.symbol)} · ${escapeHtml(item.name)} · ${escapeHtml(item.exchange)}</option>`).join("")
+      ? items.map((item) => `<option value="${escapeHtml(item.symbol)}" data-exchange="${escapeHtml(item.exchange)}">${escapeHtml(item.symbol)} · ${escapeHtml(item.name)} · ${escapeHtml(item.exchange)}</option>`).join("")
       : '<option value="" selected disabled>暂无可用证券</option>';
     if (items.some((item) => item.symbol === "600519.SH")) symbolInput.value = "600519.SH";
+    if (items.length) securitySearch.value = `${items[symbolInput.selectedIndex].name} · ${items[symbolInput.selectedIndex].symbol}`;
     if (items.length && marketForm.checkValidity()) loadMarket();
+    if (items.length) loadRealtimeQuotes();
   } catch (error) {
     console.warn(error.message || "证券列表加载失败");
     symbolInput.innerHTML = '<option value="" selected disabled>证券列表加载失败</option>';
+    securitySearch.placeholder = "证券列表加载失败";
   }
 }
 
@@ -126,14 +151,6 @@ function pad(value) {
 
 function toDateInputValue(date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
-
-function initializeDateRange() {
-  const end = new Date();
-  const start = new Date(end);
-  start.setDate(start.getDate() - 90);
-  endDateInput.value = toDateInputValue(end);
-  startDateInput.value = toDateInputValue(start);
 }
 
 function formatDate(value) {
@@ -271,7 +288,7 @@ function renderAgentMessage(message) {
   const citations = message.citations || [];
   const report = message.kind === "monitor_report" ? message.payload?.report : null;
   const approval = message.kind === "approval" ? message.payload?.approval : null;
-  const reportHtml = report ? `<div class="agent-monitor-card"><strong>${escapeHtml(report.symbol || "")} ${escapeHtml(report.name || "")} 监测报告</strong><p>${escapeHtml(report.analysis || "无分析文本")}</p><button type="button" class="secondary-button" data-action="open-monitor-dashboard">查看监测仪表盘</button></div>` : "";
+  const reportHtml = report ? `<div class="agent-monitor-card"><strong>${escapeHtml(report.symbol || "")} ${escapeHtml(report.name || "")} 监测报告</strong><p>${escapeHtml(report.analysis || "无分析文本")}</p></div>` : "";
   const approvalActions = !approval?.status || approval.status === "pending" ? '<div class="approval-actions"><button type="button" class="primary-button" data-decision="approve">批准</button><button type="button" class="secondary-button" data-decision="reject">拒绝</button></div>' : "";
   const approvalHtml = approval ? `<div class="approval-card" data-approval-id="${escapeHtml(approval.approval_id)}"><h4>需要确认：${escapeHtml(approval.tool_name)}</h4><p>${escapeHtml(approval.summary || JSON.stringify(approval.args || {}))}</p>${approvalActions}</div>` : "";
   const citationHtml = citations.length ? `<details class="agent-citations"><summary>来源与引用（${citations.length}）</summary><ol>${citations.map((citation) => `<li>[${citation.citation_id}] ${citation.url ? `<a href="${escapeHtml(citation.url)}" target="_blank" rel="noreferrer">${escapeHtml(citation.title)}</a>` : escapeHtml(citation.title)}${citation.locator ? ` · ${escapeHtml(citation.locator)}` : ""}</li>`).join("")}</ol></details>` : "";
@@ -460,6 +477,7 @@ async function loadInspector(turnId = state.agentTurnId) {
 function setMarketMessage(message, kind = "info") {
   marketMessage.textContent = message;
   marketMessage.className = `market-message ${kind}`;
+  marketMessage.hidden = !message;
 }
 
 function setMonitorMessage(element, message, kind = "info") {
@@ -474,87 +492,205 @@ function setLoading(isLoading) {
   }
 }
 
-function renderStats(summary) {
-  const latest = summary.last_close;
-  const cards = [
-    ["最新收盘", formatNumber(latest), summary.recent_trading_date ? formatDate(summary.recent_trading_date) : ""],
-    ["区间涨跌", formatPercent(summary.interval_return), `${formatDate(summary.start_date)} — ${formatDate(summary.end_date)}`],
-    ["年化波动率", formatPercent(summary.annualized_volatility), "按日收益率估算"],
-    ["停牌天数", `${summary.suspended_days ?? 0} 天`, summary.data_gap_note || "未发现停牌记录"],
-  ];
-  marketStats.innerHTML = cards.map(([label, value, note]) => `<div class="stat-card"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><small>${escapeHtml(note)}</small></div>`).join("");
-}
-
-function renderLineage(summary, bars) {
-  const latest = bars[bars.length - 1] || {};
-  const adjustmentLabels = { qfq: "前复权", hfq: "后复权", none: "不复权" };
-  const latestDate = summary.recent_trading_date || latest.trading_date;
-  const updateTime = latest.available_at || latest.ingested_at;
-  marketSourceBadge.textContent = `${summary.symbol} · ${summary.exchange}`;
-  lineageStrip.innerHTML = `
-    <div><span>最新交易日</span><strong>${escapeHtml(latestDate ? formatDate(latestDate) : "—")}</strong></div>
-    <div><span>复权方式</span><strong>${escapeHtml(adjustmentLabels[summary.adjustment_type] || "不复权")}</strong></div>
-    <div><span>数据更新</span><strong>${escapeHtml(updateTime ? formatDateTime(updateTime) : "—")}</strong></div>
-    <div><span>数据状态</span><strong>${escapeHtml(summary.data_gap_note ? "部分数据缺失" : "数据完整")}</strong></div>`;
-}
-
-function renderBarsTable(bars) {
-  barCount.textContent = `${bars.length} 条记录`;
-  if (!bars.length) {
-    barsTableBody.innerHTML = '<tr><td colspan="7" class="table-empty">暂无日线数据</td></tr>';
-    return;
-  }
-  barsTableBody.innerHTML = [...bars].reverse().map((bar) => {
-    const flags = [bar.is_suspended ? "停牌" : "", bar.is_st ? "ST" : ""].filter(Boolean);
-    return `<tr><td>${escapeHtml(formatDate(bar.trading_date))}</td><td>${formatNumber(bar.open)}</td><td>${formatNumber(bar.high)}</td><td>${formatNumber(bar.low)}</td><td class="${Number(bar.close) >= Number(bar.open) ? "up-text" : "down-text"}">${formatNumber(bar.close)}</td><td>${formatNumber(bar.volume, 0)}</td><td>${flags.length ? flags.map((flag) => `<span class="table-tag">${escapeHtml(flag)}</span>`).join("") : '<span class="muted">正常</span>'}</td></tr>`;
-  }).join("");
-}
-
-function renderChart(summary) {
+function renderChart(summary, viewport = null) {
   const bars = [...(summary.bars || [])].sort((a, b) => String(a.trading_date).localeCompare(String(b.trading_date)));
   const hasData = bars.length > 0;
   chartEmpty.hidden = hasData;
+  chartEmpty.textContent = "暂无行情数据";
   marketChart.classList.toggle("is-empty", !hasData);
-  chartSubtitle.textContent = hasData ? `${formatDate(bars[0].trading_date)} — ${formatDate(bars[bars.length - 1].trading_date)} · ${bars.length} 个交易日` : "暂无数据";
+  chartSubtitle.textContent = hasData ? `${formatDate(bars[0].period_first_date || bars[0].trading_date)} — ${formatDate(bars[bars.length - 1].trading_date)} · ${bars.length} ${state.marketPeriod === "daily" ? "个交易日" : "个周期"}` : "暂无数据";
   if (!hasData || typeof window.echarts === "undefined") {
-    if (hasData && typeof window.echarts === "undefined") chartEmpty.textContent = "图表组件加载失败，可查看下方日线明细";
+    if (hasData && typeof window.echarts === "undefined") chartEmpty.textContent = "图表组件加载失败";
     if (state.chart) state.chart.clear();
     return;
   }
-  if (!state.chart) state.chart = window.echarts.init(marketChart);
+  ensureMarketChart();
   const dates = bars.map((bar) => bar.trading_date);
   const candles = bars.map((bar) => [Number(bar.open), Number(bar.close), Number(bar.low), Number(bar.high)]);
-  const volumes = bars.map((bar) => ({ value: Number(bar.volume || 0), itemStyle: { color: Number(bar.close) >= Number(bar.open) ? "#ef6a6a" : "#4aa38a" } }));
+  const volumes = bars.map((bar) => ({ value: bar.volume == null ? null : Number(bar.volume), itemStyle: { color: Number(bar.close) >= Number(bar.open) ? "#ef6a6a" : "#4aa38a" } }));
   state.chart.setOption({
     animation: false,
     tooltip: { trigger: "axis", axisPointer: { type: "cross" }, backgroundColor: "rgba(20, 31, 49, .94)", borderWidth: 0, textStyle: { color: "#fff" }, formatter: (params) => {
       const index = params[0]?.dataIndex ?? 0;
       const bar = bars[index];
-      const flags = [bar.is_suspended ? "停牌" : "", bar.is_st ? "ST" : ""].filter(Boolean).join(" / ");
-      return `<strong>${escapeHtml(formatDate(bar.trading_date))}</strong><br/>开盘 ${formatNumber(bar.open)}　收盘 ${formatNumber(bar.close)}<br/>最高 ${formatNumber(bar.high)}　最低 ${formatNumber(bar.low)}<br/>成交量 ${formatNumber(bar.volume, 0)}${flags ? `<br/>${escapeHtml(flags)}` : ""}`;
+      const flags = [bar.is_suspended ? "停牌" : "", bar.is_st ? "ST" : "", bar.provisional ? "临时行情" : ""].filter(Boolean).join(" / ");
+      return `<strong>${escapeHtml(formatDate(bar.trading_date))}</strong><br/>开盘 ${formatNumber(bar.open)}　${bar.provisional ? "最新" : "收盘"} ${formatNumber(bar.close)}<br/>最高 ${formatNumber(bar.high)}　最低 ${formatNumber(bar.low)}<br/>成交量 ${bar.volume == null ? "暂无" : formatNumber(bar.volume, 0)}${flags ? `<br/>${escapeHtml(flags)}` : ""}`;
     } },
     axisPointer: { link: [{ xAxisIndex: "all" }] },
     grid: [{ left: 56, right: 22, top: 24, height: "58%" }, { left: 56, right: 22, top: "72%", height: "16%" }],
     xAxis: [{ type: "category", data: dates, boundaryGap: true, axisLine: { lineStyle: { color: "#d7dee8" } }, axisLabel: { color: "#768397", formatter: (value) => String(value).slice(5) } }, { type: "category", gridIndex: 1, data: dates, axisLabel: { show: false }, axisLine: { show: false } }],
-    yAxis: [{ scale: true, splitLine: { lineStyle: { color: "#eef2f6" } }, axisLabel: { color: "#768397" } }, { scale: true, gridIndex: 1, splitLine: { show: false }, axisLabel: { color: "#768397" } }],
-    dataZoom: [{ type: "inside", xAxisIndex: [0, 1], start: Math.max(0, 100 - (bars.length > 90 ? 70 : 100)), end: 100 }, { type: "slider", xAxisIndex: [0, 1], bottom: 4, height: 18, borderColor: "#d7dee8", fillerColor: "rgba(15, 118, 110, .14)", textStyle: { color: "#768397" } }],
+    yAxis: [{ scale: true, splitLine: { lineStyle: { color: "#eef2f6" } }, axisLabel: { color: "#768397", hideOverlap: true } }, { gridIndex: 1, min: 0, splitNumber: 2, splitLine: { show: false }, axisLabel: { color: "#768397", hideOverlap: true, formatter: (value) => value >= 100000000 ? `${(value / 100000000).toFixed(1)}亿` : value >= 10000 ? `${(value / 10000).toFixed(1)}万` : String(value) } }],
+    dataZoom: [{ type: "inside", xAxisIndex: [0, 1], ...(viewport || { start: bars.length > 90 ? 30 : 0, end: 100 }) }, { type: "slider", xAxisIndex: [0, 1], bottom: 4, height: 18, borderColor: "#d7dee8", fillerColor: "rgba(15, 118, 110, .14)", textStyle: { color: "#768397" } }],
     series: [{ name: "价格", type: "candlestick", data: candles, itemStyle: { color: "#ef6a6a", color0: "#4aa38a", borderColor: "#ef6a6a", borderColor0: "#4aa38a" } }, { name: "成交量", type: "bar", xAxisIndex: 1, yAxisIndex: 1, data: volumes }],
   }, true);
 }
 
-function renderMarketSummary(summary) {
-  const bars = summary.bars || [];
-  renderStats(summary);
-  renderChart(summary);
-  renderLineage(summary, bars);
-  renderBarsTable(bars);
+function ensureMarketChart() {
+  if (state.chart) return;
+  state.chart = window.echarts.init(marketChart);
+  state.chart.on("datazoom", () => {
+    if (state.marketPeriod === "intraday" || state.historyLoading || state.historyFailed || !state.historyHasMore) return;
+    const zoom = state.chart.getOption().dataZoom?.[0];
+    if (zoom && zoom.start <= 5) loadOlderHistory();
+  });
+}
+
+function aggregateBars(bars, period) {
+  if (period === "daily") return bars;
+  const groups = new Map();
+  for (const bar of [...bars].sort((a, b) => String(a.trading_date).localeCompare(String(b.trading_date)))) {
+    const date = new Date(`${String(bar.trading_date).slice(0, 10)}T00:00:00Z`);
+    if (period === "weekly") date.setUTCDate(date.getUTCDate() - (date.getUTCDay() + 6) % 7);
+    else date.setUTCDate(1);
+    const key = date.toISOString().slice(0, 10);
+    const group = groups.get(key);
+    if (!group) groups.set(key, { ...bar, period_first_date: bar.trading_date });
+    else {
+      group.trading_date = bar.trading_date;
+      group.high = Math.max(Number(group.high), Number(bar.high));
+      group.low = Math.min(Number(group.low), Number(bar.low));
+      group.close = bar.close;
+      group.volume = group.volume == null || bar.volume == null ? null : Number(group.volume) + Number(bar.volume);
+      group.is_suspended ||= bar.is_suspended;
+      group.is_st ||= bar.is_st;
+      group.provisional ||= bar.provisional;
+    }
+  }
+  return [...groups.values()];
+}
+
+function chinaDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date);
+  const get = (name) => parts.find((part) => part.type === name)?.value;
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+function provisionalDailyBar(quote, bars, symbol, now) {
+  if (!quote || quote.symbol !== symbol || !["fresh", "closed"].includes(quote.status) || quote.quote_status !== "valid") return null;
+  const timestamp = new Date(quote.source_time).getTime();
+  const capture = new Date(quote.captured_at).getTime();
+  if (!Number.isFinite(timestamp) || !Number.isFinite(capture) || timestamp > now || capture > now) return null;
+  const day = chinaDate(timestamp);
+  if (day !== chinaDate(now) || chinaDate(capture) !== day || bars.some((bar) => bar.trading_date >= day)) return null;
+  const values = [quote.day_open, quote.day_high, quote.day_low, quote.price];
+  if (values.some((value) => value == null || !Number.isFinite(Number(value)) || Number(value) <= 0)) return null;
+  const [open, high, low, close] = values.map(Number);
+  if (high < Math.max(open, close) || low > Math.min(open, close) || high < low) return null;
+  const volume = quote.volume_lots == null || !Number.isFinite(Number(quote.volume_lots)) || Number(quote.volume_lots) < 0 ? null : Number(quote.volume_lots) * 100;
+  return { trading_date: day, open, high, low, close, volume, provisional: true };
+}
+
+function selectedQuoteSymbol() {
+  const selected = symbolInput.value.trim();
+  const exchange = symbolInput.selectedOptions[0]?.dataset.exchange?.toUpperCase();
+  return /^\d{6}$/.test(selected) && ["SH", "SZ", "BJ"].includes(exchange) ? `${selected}.${exchange}` : selected;
+}
+
+function displayDailyBars() {
+  const bars = state.historyBars;
+  const provisional = provisionalDailyBar(state.liveQuote, bars, selectedQuoteSymbol(), Date.now());
+  if (provisional) state.lastProvisionalDate = provisional.trading_date;
+  return provisional ? [...bars, provisional] : bars;
+}
+
+function currentChartViewport(bars) {
+  const zoom = state.chart?.getOption().dataZoom?.[0];
+  if (!zoom || !bars.length) return null;
+  return { startValue: bars[Math.round((bars.length - 1) * zoom.start / 100)].trading_date,
+    endValue: bars[Math.round((bars.length - 1) * zoom.end / 100)].trading_date };
+}
+
+function renderHistoryChart(viewport = null) {
+  const daily = displayDailyBars();
+  const bars = aggregateBars(daily, state.marketPeriod);
+  renderChart({ bars }, viewport);
+  if (daily.some((bar) => bar.provisional)) {
+    chartSubtitle.textContent += " · 含临时行情";
+    const previous = state.historyBars.at(-1)?.trading_date;
+    const last = daily.at(-1).trading_date;
+    if (!previous) chartSubtitle.textContent += " · 暂无历史行情";
+    else if ((Date.parse(`${last}T00:00:00Z`) - Date.parse(`${previous}T00:00:00Z`)) / 86400000 > 1) chartSubtitle.textContent += " · 历史数据可能有缺口";
+  }
+}
+
+function renderSelectedPeriod() {
+  const period = state.marketPeriod;
+  const intraday = period === "intraday";
+  historyStatus.hidden = intraday;
+  loadOlderButton.hidden = intraday || !state.historyHasMore;
+  if (intraday) { loadIntraday(); return; }
+  ++state.intradayRequestId;
+  renderHistoryChart();
+}
+
+async function loadIntraday() {
+  const requestId = ++state.intradayRequestId;
+  const selectedSymbol = symbolInput.value;
+  const exchange = symbolInput.selectedOptions[0]?.dataset.exchange?.toUpperCase();
+  const symbol = /^\d{6}$/.test(selectedSymbol) && ["SH", "SZ", "BJ"].includes(exchange) ? `${selectedSymbol}.${exchange}` : selectedSymbol;
+  chartEmpty.hidden = false;
+  chartEmpty.textContent = "正在加载分时数据…";
+  chartSubtitle.textContent = "分时走势";
+  if (state.chart) state.chart.clear();
+  if (!symbol) { chartEmpty.textContent = "请选择证券"; return; }
+  try {
+    const response = await fetch(`/api/realtime-quotes/intraday?${new URLSearchParams({ symbol })}`);
+    if (!response.ok) throw new Error("分时数据暂不可用");
+    const data = await response.json();
+    if (requestId !== state.intradayRequestId || state.marketPeriod !== "intraday" || selectedSymbol !== symbolInput.value) return;
+    const points = data.points || [];
+    if (!points.length) { chartEmpty.textContent = "暂无分时数据"; return; }
+    chartEmpty.hidden = true;
+    marketChart.classList.remove("is-empty");
+    if (!state.chart && window.echarts) ensureMarketChart();
+    if (!state.chart) { chartEmpty.hidden = false; chartEmpty.textContent = "图表组件加载失败"; return; }
+    const series = intradaySeries(points);
+    if (!series.length) { chartEmpty.hidden = false; chartEmpty.textContent = "暂无交易时段内的分时数据"; return; }
+    const previousClose = intradayPreviousClose(state.liveQuote?.previous_close);
+    const firstPoint = series.find((point) => point.time);
+    chartSubtitle.textContent = `${formatRealtimeTime(firstPoint.time).split(' ')[0]} · 分时走势${points.some((point) => point.incomplete) ? " · 部分数据待更新" : ""}`;
+    state.chart.setOption({ animation: false, tooltip: { trigger: "axis", formatter: (params) => {
+      const item = params.find((entry) => entry.data?.time);
+      if (!item) return "";
+      return `${escapeHtml(formatRealtimeTime(item.data.time))}<br/>价格 ${formatNumber(item.data.value[1])}`;
+    } }, grid: { left: 56, right: 22, top: 25, bottom: 35 }, xAxis: { type: "value", min: 0, max: 240, interval: 60, axisLabel: { formatter: (value) => ({ 0: "09:30", 60: "10:30", 120: "11:30 / 13:00", 180: "14:00", 240: "15:00" })[value] || "" } }, yAxis: { type: "value", scale: true, axisLabel: { hideOverlap: true }, splitLine: { lineStyle: { color: "#eef2f6" } } }, series: [{ name: "价格", type: "line", showSymbol: false, connectNulls: false, data: series, lineStyle: { color: "#0f766e" }, markLine: { symbol: "none", silent: true, data: previousClose == null ? [] : [{ name: "昨收", yAxis: previousClose, lineStyle: { color: "#9aa6b2", type: "dashed", width: 1 }, label: { show: true, formatter: "昨收", position: "insideEndTop", color: "#768397" } }] } }] }, true);
+  } catch (error) {
+    if (requestId === state.intradayRequestId && state.marketPeriod === "intraday") chartEmpty.textContent = "分时数据暂不可用";
+  }
+}
+
+function intradayTradingMinute(value) {
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(timestamp);
+  const get = (type) => Number(parts.find((part) => part.type === type)?.value);
+  const minute = get("hour") * 60 + get("minute") + get("second") / 60;
+  if (minute < 570 || minute > 900 || (minute > 690 && minute < 780)) return null;
+  return minute <= 690 ? minute - 570 : minute - 780 + 120;
+}
+
+function intradaySeries(points) {
+  const result = [];
+  for (const point of points) {
+    const x = intradayTradingMinute(point.time);
+    if (x == null || point.price == null) continue;
+    const previous = result.at(-1);
+    if (previous?.time && x - previous.value[0] > 1 + 1e-6) result.push({ value: [x, null], time: null });
+    result.push({ value: [x, Number(point.price)], time: point.time });
+  }
+  return result;
+}
+
+function intradayPreviousClose(value) {
+  const price = Number(value);
+  return value != null && Number.isFinite(price) && price > 0 ? price : null;
 }
 
 function clearMarket() {
-  marketStats.innerHTML = "";
-  lineageStrip.innerHTML = "";
-  renderBarsTable([]);
-  renderChart({ bars: [] });
+  state.marketSummary = null;
+  if (state.marketPeriod !== "intraday") renderChart({ bars: [] });
 }
 
 async function loadMarket() {
@@ -562,33 +698,106 @@ async function loadMarket() {
   const requestId = ++state.marketRequestId;
   if (state.marketAbortController) state.marketAbortController.abort();
   state.marketAbortController = new AbortController();
+  state.historyBars = [];
+  state.historyBefore = null;
+  state.historyHasMore = false;
+  state.historyLoading = false;
+  state.historyFailed = false;
+  state.historyReady = false;
+  state.lastProvisionalDate = null;
+  state.lastReconcileAt = 0;
+  const selected = symbolInput.value.trim();
+  const exchange = symbolInput.selectedOptions[0]?.dataset.exchange?.toUpperCase();
+  state.historySymbol = /^\d{6}$/.test(selected) && ["SH", "SZ", "BJ"].includes(exchange) ? `${selected}.${exchange}` : selected;
+  ++state.intradayRequestId;
+  clearMarket();
+  if (state.marketPeriod === "intraday") { marketSourceBadge.textContent = symbolInput.value; renderSelectedPeriod(); return; }
+  historyStatus.hidden = false;
   setLoading(true);
-  const params = new URLSearchParams({ symbol: symbolInput.value.trim(), start_date: startDateInput.value, end_date: endDateInput.value, adjustment_type: adjustmentInput.value });
-  if (asOfInput.value) {
-    const asOf = new Date(asOfInput.value);
-    if (!Number.isNaN(asOf.getTime())) params.set("as_of", asOf.toISOString());
-  }
+  await loadHistoryPage(requestId, false);
+}
+
+async function loadOlderHistory() {
+  if (state.historyLoading || !state.historyHasMore || !state.historyBefore || state.marketPeriod === "intraday") return;
+  await loadHistoryPage(state.marketRequestId, true);
+}
+
+async function loadHistoryPage(requestId, older) {
+  state.historyLoading = true;
+  state.historyFailed = false;
+  historyStatus.textContent = older ? "正在加载更早行情…" : "正在加载行情…";
+  loadOlderButton.hidden = true;
+  const params = new URLSearchParams({ symbol: state.historySymbol, period: state.marketPeriod, adjustment_type: MARKET_ADJUSTMENT });
+  if (older) params.set("before", state.historyBefore);
   try {
-    const response = await fetch(`/api/market?${params.toString()}`, { signal: state.marketAbortController.signal });
-    const payload = await response.json().catch(() => ({}));
+    let response = await fetch(`/api/market/history?${params.toString()}`, { signal: state.marketAbortController.signal });
+    let payload = await response.json().catch(() => ({}));
     if (requestId !== state.marketRequestId) return;
     if (!response.ok) throw new Error(payload.detail || `行情查询失败（${response.status}）`);
-    const summary = payload.items?.[0];
-    if (!summary) {
-      clearMarket();
-      marketSourceBadge.textContent = "暂无数据";
-      setMarketMessage(payload.message || "当前条件下暂无行情数据。", "warning");
-      return;
+    if (!older && !payload.items?.length && !payload.has_more && state.historySymbol !== symbolInput.value.trim()) {
+      params.set("symbol", symbolInput.value.trim());
+      response = await fetch(`/api/market/history?${params.toString()}`, { signal: state.marketAbortController.signal });
+      payload = await response.json().catch(() => ({}));
+      if (requestId !== state.marketRequestId) return;
+      if (!response.ok) throw new Error(payload.detail || `行情查询失败（${response.status}）`);
+      state.historySymbol = symbolInput.value.trim();
     }
-    renderMarketSummary(summary);
-    setMarketMessage("行情数据已更新，可在图表和明细中查看。", "success");
+    const summary = payload.items?.[0];
+    let viewport = null;
+    if (older && state.chart && state.historyBars.length) {
+      viewport = currentChartViewport(aggregateBars(displayDailyBars(), state.marketPeriod));
+    }
+    const merged = new Map(state.historyBars.map((bar) => [bar.trading_date, bar]));
+    for (const bar of summary?.bars || []) if (!merged.has(bar.trading_date)) merged.set(bar.trading_date, bar);
+    state.historyBars = [...merged.values()].sort((a, b) => a.trading_date.localeCompare(b.trading_date));
+    state.historyBefore = payload.next_before;
+    state.historyHasMore = payload.has_more;
+    if (!older && summary) {
+      state.marketSummary = summary;
+      marketSourceBadge.textContent = `${summary.symbol} · ${summary.exchange}`;
+    } else if (!older) marketSourceBadge.textContent = symbolInput.value;
+    state.historyReady = true;
+    if (!older) state.lastReconcileAt = Date.now();
+    renderHistoryChart(viewport);
+    historyStatus.textContent = payload.has_more ? "向左拖动查看更早行情" : "已到最早可用行情";
+    loadOlderButton.hidden = !payload.has_more;
+    loadOlderButton.textContent = "加载更早行情";
+    setMarketMessage("");
   } catch (error) {
-    if (error.name === "AbortError") return;
-    clearMarket();
-    marketSourceBadge.textContent = "查询失败";
-    setMarketMessage(error.message || "行情查询失败，请稍后重试。", "error");
+    if (error.name === "AbortError" || requestId !== state.marketRequestId) return;
+    state.historyFailed = true;
+    historyStatus.textContent = "行情加载失败，请重试";
+    loadOlderButton.hidden = false;
+    loadOlderButton.textContent = "重试";
+    if (!older) { marketSourceBadge.textContent = "查询失败"; setMarketMessage(error.message || "行情查询失败，请稍后重试。", "error"); }
   } finally {
-    if (requestId === state.marketRequestId) setLoading(false);
+    if (requestId === state.marketRequestId) { state.historyLoading = false; setLoading(false); }
+  }
+}
+
+async function reconcileFormalBar() {
+  const target = state.lastProvisionalDate;
+  if (!target || state.reconciling || !state.historyReady || state.historyBars.some((bar) => bar.trading_date === target) || Date.now() - state.lastReconcileAt < 120000) return;
+  const requestId = state.marketRequestId;
+  const period = state.marketPeriod;
+  const params = new URLSearchParams({ symbol: state.historySymbol, period, adjustment_type: MARKET_ADJUSTMENT });
+  state.reconciling = true;
+  state.lastReconcileAt = Date.now();
+  try {
+    const response = await fetch(`/api/market/history?${params}`, { signal: state.marketAbortController.signal });
+    if (!response.ok) return;
+    const data = await response.json();
+    if (requestId !== state.marketRequestId || period !== state.marketPeriod) return;
+    const formal = data.items?.[0]?.bars?.find((bar) => bar.trading_date === target);
+    if (!formal) return;
+    const viewport = currentChartViewport(aggregateBars(displayDailyBars(), period));
+    state.historyBars = [...state.historyBars.filter((bar) => bar.trading_date !== target), formal].sort((a, b) => a.trading_date.localeCompare(b.trading_date));
+    state.lastProvisionalDate = null;
+    renderHistoryChart(viewport);
+  } catch (error) {
+    if (error.name !== "AbortError") console.warn("日线更新暂不可用");
+  } finally {
+    state.reconciling = false;
   }
 }
 
@@ -1480,10 +1689,6 @@ manageWebDomainsButton?.addEventListener("click", async () => {
 });
 
 agentMessages?.addEventListener("click", async (event) => {
-  if (event.target.closest('[data-action="open-monitor-dashboard"]')) {
-    document.querySelector('[data-page="monitorPage"]')?.click();
-    return;
-  }
   const button = event.target.closest("button[data-decision]");
   const card = button?.closest("[data-approval-id]");
   if (button && card) {
@@ -1586,8 +1791,101 @@ reportList.addEventListener("click", (event) => {
 });
 
 marketForm.addEventListener("submit", (event) => event.preventDefault());
+let securityMatches = [];
+let securityActive = 0;
+function closeSecurityResults() {
+  securityResults.hidden = true;
+  securitySearch.setAttribute("aria-expanded", "false");
+  securitySearch.removeAttribute("aria-activedescendant");
+}
+function showSecurityResults(query) {
+  const text = query.trim().toLocaleLowerCase();
+  const all = state.securities.map((item, index) => ({ item, index })).filter(({ item }) => `${item.symbol} ${item.name} ${item.exchange}`.toLocaleLowerCase().includes(text));
+  securityActive = 0;
+  securityResults.innerHTML = all.map(({ item, index }, position) => `<div class="security-option" role="option" id="security-option-${position}" data-index="${index}" aria-selected="${position === 0}"><span>${escapeHtml(item.name)}</span><small>${escapeHtml(item.symbol)} · ${escapeHtml(item.exchange)}</small></div>`).join("") + (!all.length ? '<div class="security-results-note">未找到证券</div>' : "");
+  securityResults.hidden = false;
+  securitySearch.setAttribute("aria-expanded", "true");
+  if (securityMatches.length) securitySearch.setAttribute("aria-activedescendant", "security-option-0");
+  else securitySearch.removeAttribute("aria-activedescendant");
+}
+function chooseSecurity(index) {
+  const item = state.securities[index];
+  if (!item) return;
+  symbolInput.selectedIndex = index;
+  securitySearch.value = `${item.name} · ${item.symbol}`;
+  closeSecurityResults();
+  symbolInput.dispatchEvent(new Event("change", { bubbles: true }));
+}
+securitySearch.addEventListener("focus", () => { securitySearch.select(); showSecurityResults(symbolInput.value ? "" : securitySearch.value); });
+securitySearch.addEventListener("click", () => { if (securityResults.hidden) showSecurityResults(symbolInput.value ? "" : securitySearch.value); });
+securitySearch.addEventListener("blur", closeSecurityResults);
+securitySearch.addEventListener("input", () => {
+  symbolInput.selectedIndex = -1;
+  showSecurityResults(securitySearch.value);
+  ++state.marketRequestId;
+  ++state.intradayRequestId;
+  state.marketAbortController?.abort();
+  state.historyHasMore = false;
+  state.historyBars = [];
+  state.historyReady = false;
+  state.liveQuote = null;
+  state.lastProvisionalDate = null;
+  clearMarket();
+  state.chart?.clear();
+  chartEmpty.hidden = false;
+  chartEmpty.textContent = "请选择证券";
+  chartSubtitle.textContent = "暂无数据";
+  historyStatus.textContent = "";
+  loadOlderButton.hidden = true;
+  marketSourceBadge.textContent = "请选择证券";
+  setMarketMessage("");
+  clearStockPrice();
+  stockPriceTime.textContent = "请选择证券";
+  clearStockMetrics();
+  loadRealtimeQuotes();
+});
+securitySearch.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") { closeSecurityResults(); return; }
+  if (!["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) return;
+  event.preventDefault();
+  if (securityResults.hidden) { showSecurityResults(symbolInput.value ? "" : securitySearch.value); return; }
+  if (!securityMatches.length) return;
+  if (event.key === "Enter") { chooseSecurity(securityMatches[securityActive].index); return; }
+  securityActive = (securityActive + (event.key === "ArrowDown" ? 1 : -1) + securityMatches.length) % securityMatches.length;
+  for (const [index, option] of [...securityResults.querySelectorAll('[role="option"]')].entries()) option.setAttribute("aria-selected", String(index === securityActive));
+  const active = document.getElementById(`security-option-${securityActive}`);
+  securitySearch.setAttribute("aria-activedescendant", active.id);
+  active.scrollIntoView({ block: "nearest" });
+});
+securityResults.addEventListener("mousedown", (event) => event.preventDefault());
+securityResults.addEventListener("click", (event) => {
+  const option = event.target.closest("[data-index]");
+  if (option) chooseSecurity(Number(option.dataset.index));
+});
+document.addEventListener("click", (event) => { if (!event.target.closest(".security-picker")) closeSecurityResults(); });
 marketForm.addEventListener("change", (event) => {
-  if (event.target.matches("select, input")) loadMarket();
+  if (event.target.matches("select")) loadMarket();
+  if (event.target === symbolInput) {
+    clearStockPrice();
+    stockPriceTime.textContent = "正在获取行情";
+    clearStockMetrics();
+    loadRealtimeQuotes();
+  }
+});
+document.querySelector(".period-tabs").addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-period]");
+  if (!button) return;
+  state.marketPeriod = button.dataset.period;
+  for (const tab of document.querySelectorAll(".period-tabs button")) {
+    const active = tab === button;
+    tab.classList.toggle("active", active);
+    tab.setAttribute("aria-selected", String(active));
+  }
+  loadMarket();
+});
+loadOlderButton.addEventListener("click", () => {
+  if (state.historyBefore) loadOlderHistory();
+  else loadMarket();
 });
 chatForm.addEventListener("submit", (event) => { event.preventDefault(); const question = questionInput.value.trim(); if (!question || state.chatStreaming) return; addMessage("user", question); questionInput.value = ""; sendQuestion(question); });
 questionInput.addEventListener("keydown", (event) => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) chatForm.requestSubmit(); });
@@ -1597,7 +1895,115 @@ prevPageButton.addEventListener("click", () => { if (state.newsPage > 1) { state
 nextPageButton.addEventListener("click", () => { state.newsPage += 1; loadNews(); });
 window.addEventListener("resize", () => state.chart?.resize());
 
-initializeDateRange();
+let realtimeRequestId = 0;
+let realtimeAbortController = null;
+function formatRealtimeTime(value) {
+  if (!value) return "未知";
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) return "未知";
+  return timestamp.toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false });
+}
+const indexNames = [["000001.SH", "上证指数"], ["399001.SZ", "深证成指"], ["399006.SZ", "创业板指"]];
+function renderRealtimeIndices(indices = []) {
+  const bySymbol = new Map(indices.map((item) => [item.symbol, item]));
+  document.getElementById("realtimeIndices").innerHTML = indexNames.map(([symbol, name]) => {
+    const item = bySymbol.get(symbol);
+    if (!item) return `<div class="index-card"><span class="index-name">${name}</span><strong>—</strong><small>暂无数据</small></div>`;
+    const change = Number(item.change);
+    const color = change > 0 ? "market-up" : change < 0 ? "market-down" : "market-flat";
+    const sign = change > 0 ? "+" : "";
+    const status = {fresh: "", closed: "休市 · ", unknown: "交易状态未知 · ", not_updated: "最近行情 · ", source_error: "最近行情 · "}[item.status] ?? "最近行情 · ";
+    return `<div class="index-card"><span class="index-name">${name}</span><strong class="${color}">${formatNumber(item.price)}</strong><span class="index-change ${color}">${sign}${formatNumber(change)}　${sign}${formatNumber(item.change_percent)}%</span><small>${status}${escapeHtml(formatRealtimeTime(item.source_time))}</small></div>`;
+  }).join("");
+}
+renderRealtimeIndices();
+function clearStockMetrics() {
+  stockVolume.textContent = stockMarketCap.textContent = stockPe.textContent = "—";
+}
+function clearStockPrice() {
+  stockLastPrice.textContent = "—";
+  stockLastPrice.className = "";
+  stockChangePercent.textContent = "";
+  stockChangePercent.className = "stock-change";
+  stockPreviousClose.textContent = "—";
+}
+function renderStockMetrics(quote) {
+  const volume = quote?.volume_lots;
+  const cap = quote?.market_cap_cny;
+  const pe = quote?.pe_ratio;
+  stockVolume.textContent = volume == null ? "—" : Number(volume) >= 10000 ? `${formatNumber(Number(volume) / 10000)} 万手` : `${formatNumber(volume, 0)} 手`;
+  stockMarketCap.textContent = cap == null ? "—" : `${formatNumber(Number(cap) / 100000000)} 亿元`;
+  stockPe.textContent = pe == null || Number(pe) === 0 ? "—" : Number(pe) < 0 ? "亏损" : `${formatNumber(pe)} 倍`;
+}
+async function loadRealtimeQuotes() {
+  const overview = document.getElementById("realtimeMarketOverview");
+  const requestId = ++realtimeRequestId;
+  const symbol = symbolInput.value;
+  const exchange = symbolInput.selectedOptions[0]?.dataset.exchange?.toUpperCase();
+  const quoteSymbol = /^\d{6}$/.test(symbol) && ["SH", "SZ", "BJ"].includes(exchange) ? `${symbol}.${exchange}` : symbol;
+  if (realtimeAbortController) realtimeAbortController.abort();
+  realtimeAbortController = new AbortController();
+  try {
+    const params = new URLSearchParams();
+    if (quoteSymbol) params.set("symbol", quoteSymbol);
+    const response = await fetch(`/api/realtime-quotes?${params}`, { signal: realtimeAbortController.signal });
+    if (!response.ok) throw new Error("unavailable");
+    const data = await response.json();
+    if (requestId !== realtimeRequestId || symbol !== symbolInput.value) return;
+    const quote = data.quote;
+    const updateChart = state.marketPeriod !== "intraday" && state.historyReady && !state.historyLoading;
+    const previousBars = updateChart ? aggregateBars(displayDailyBars(), state.marketPeriod) : [];
+    const previousLive = updateChart ? JSON.stringify(provisionalDailyBar(state.liveQuote, state.historyBars, selectedQuoteSymbol(), Date.now())) : null;
+    const viewport = updateChart ? currentChartViewport(previousBars) : null;
+    const atLatest = updateChart && (state.chart?.getOption().dataZoom?.[0]?.end ?? 0) >= 99.9;
+    state.liveQuote = quote;
+    if (updateChart) {
+      const nextBar = provisionalDailyBar(quote, state.historyBars, selectedQuoteSymbol(), Date.now());
+      const nextLive = JSON.stringify(nextBar);
+      if (viewport && atLatest && nextBar) viewport.endValue = nextBar.trading_date;
+      if (previousLive !== nextLive) renderHistoryChart(viewport);
+      reconcileFormalBar();
+    }
+    if (quote?.price != null && Number.isFinite(Number(quote.price))) {
+      stockLastPrice.textContent = formatNumber(quote.price);
+      const previous = Number(quote.previous_close);
+      const price = Number(quote.price);
+      const comparable = quote.previous_close != null && Number.isFinite(previous) && previous > 0;
+      stockPreviousClose.textContent = comparable ? formatNumber(previous) : "—";
+      const change = comparable ? (price - previous) / previous * 100 : 0;
+      const color = comparable && change > 0 ? "market-up" : comparable && change < 0 ? "market-down" : "";
+      stockLastPrice.className = color;
+      stockChangePercent.className = `stock-change ${color}`;
+      stockChangePercent.textContent = comparable ? `${change > 0 ? "+" : ""}${formatNumber(change)}%` : "";
+      stockPriceTime.textContent = `${quote.status === "fresh" ? "" : "最近行情 · "}${formatRealtimeTime(quote.source_time)}`;
+      renderStockMetrics(quote);
+    } else {
+      clearStockPrice();
+      stockPriceTime.textContent = symbol ? "暂无行情" : "请选择证券";
+      clearStockMetrics();
+    }
+    const market = data.market;
+    renderRealtimeIndices(data.indices || []);
+    const roundTime = market ? new Date(market.round_id).getTime() : NaN;
+    const oldRound = Number.isFinite(roundTime) && Date.now() - roundTime > 300000;
+    overview.innerHTML = market
+      ? [["上涨", market.rising, "market-up"], ["下跌", market.falling, "market-down"], ["平盘", market.flat, "market-flat"]].map(([label, value, color]) => `<span class="breadth-item">${label}<strong class="${color}">${escapeHtml(String(value))}</strong></span>`).join("") + `<span class="market-meta">${escapeHtml(formatRealtimeTime(market.round_id))}${oldRound ? " · 最近数据" : ""}${market.complete ? "" : " · 部分行情暂未纳入"}</span>`
+      : "涨跌数据暂无数据";
+  } catch (error) {
+    if (error.name === "AbortError" || requestId !== realtimeRequestId) return;
+    const updateChart = state.marketPeriod !== "intraday" && state.historyReady && !state.historyLoading;
+    const viewport = updateChart ? currentChartViewport(aggregateBars(displayDailyBars(), state.marketPeriod)) : null;
+    state.liveQuote = null;
+    if (updateChart) renderHistoryChart(viewport);
+    clearStockPrice();
+    stockPriceTime.textContent = "行情暂不可用";
+    clearStockMetrics();
+    renderRealtimeIndices();
+    overview.textContent = "涨跌数据暂不可用";
+  }
+}
+loadRealtimeQuotes();
+setInterval(() => { loadRealtimeQuotes(); if (state.marketPeriod === "intraday") loadIntraday(); }, 15000);
 loadLlmSettings();
 loadChatThreads();
 loadSecurityOptions();

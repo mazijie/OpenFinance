@@ -153,9 +153,11 @@ def validate_gold_frame(gold: DataFrame) -> dict[str, Any]:
     }
 
 
-def write_gold_table(gold: DataFrame, table_name: str) -> None:
+def write_gold_table(gold: DataFrame, table_name: str, distribution: str = "hash") -> None:
     """Rebuild the learning Gold table atomically through a CTAS commit."""
 
+    if distribution not in {"hash", "none"}:
+        raise ValueError("Unsupported Iceberg write distribution")
     view_name = "_gold_security_daily_metrics_source"
     gold.createOrReplaceTempView(view_name)
     spark = gold.sparkSession
@@ -166,6 +168,7 @@ def write_gold_table(gold: DataFrame, table_name: str) -> None:
         PARTITIONED BY (months(trading_date))
         TBLPROPERTIES (
           'format-version' = '2',
+          'write.distribution-mode' = '{distribution}',
           'write.target-file-size-bytes' = '134217728'
         )
         AS SELECT * FROM {view_name}
@@ -231,7 +234,10 @@ def run(
         metrics = calculate_metrics(daily_bars)
         gold = build_gold_frame(metrics, start_date=start_date, end_date=end_date)
         validation = validate_gold_frame(gold)
-        target_exists = spark.catalog.tableExists(target_table)
+        parts = target_table.split(".")
+        if len(parts) != 3:
+            raise ValueError("Expected catalog.namespace.table")
+        target_exists = any(row["tableName"] == parts[2] for row in spark.sql(f"SHOW TABLES IN {parts[0]}.{parts[1]}").collect())
         effective_mode = "full" if mode == "full" or not target_exists else "incremental"
         if effective_mode == "full":
             write_gold_table(gold, target_table)

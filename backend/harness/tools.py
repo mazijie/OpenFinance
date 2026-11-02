@@ -12,6 +12,8 @@ from pydantic import BaseModel, Field, model_validator
 
 from backend.config import settings
 from backend.harness.evidence import EvidenceService
+from backend.schemas.harness import EvidenceDocument
+from backend.services.realtime_quote_service import RealtimeQuoteService
 from backend.harness.policy import PolicyGuard
 from backend.harness.store import HarnessStore
 from backend.harness.web import WebResearchService
@@ -70,6 +72,10 @@ class AnnualReportSearchInput(BaseModel):
 
 class ResolveSecurityInput(BaseModel):
     query: str
+
+
+class RealtimeQuoteInput(BaseModel):
+    symbol: str = Field(description="股票代码，例如 600519 或 600519.SH；优先包含交易所后缀")
 
 
 class WebFetchInput(BaseModel):
@@ -218,6 +224,36 @@ class ToolRegistry:
         def list_watchlist() -> str:
             return _dump({"items": [item.model_dump(mode="json") for item in self.watchlist_service.list()]})
 
+        def realtime_quote(symbol: str) -> str:
+            try:
+                result = RealtimeQuoteService().lookup(symbol, as_of=self.context.as_of)
+                quote = result["quote"]
+                if not quote or quote["status"] != "fresh":
+                    status = quote["status"] if quote else "unavailable"
+                    document = EvidenceDocument(
+                        evidence_id=f"realtime-status:{symbol}:{self.context.as_of.isoformat()}",
+                        source_type="market", source_id=symbol,
+                        title=f"{symbol} 实时行情状态", text=f"{symbol} 没有更新（状态：{status}）。",
+                        published_at=self.context.as_of, metadata={"status": status})
+                    return _dump({"documents": [document.model_dump(mode="json")], "message": "没有更新", "status": status})
+                document = EvidenceDocument(
+                    evidence_id=f"realtime:{quote['symbol']}:{quote['captured_at'].isoformat()}",
+                    source_type="market", source_id=quote["symbol"],
+                    title=f"{quote['symbol']} 实时行情快照",
+                    text=f"{quote['name']} {quote['symbol']} 最新价 {quote['price']}；来源 {quote['source']}；行情时间 {quote['source_time'].isoformat()}；采集时间 {quote['captured_at'].isoformat()}。",
+                    published_at=quote["source_time"], fetched_at=quote["captured_at"],
+                    locator=quote["source_time"].isoformat(), metadata={"status": quote["status"]})
+                return _dump({"documents": [document.model_dump(mode="json")], "message": "行情快照"})
+            except ValueError as exc:
+                return _dump({"documents": [], "message": str(exc), "status": "invalid_symbol"})
+            except Exception:
+                document = EvidenceDocument(
+                    evidence_id=f"realtime-unavailable:{symbol}:{self.context.as_of.isoformat()}",
+                    source_type="market", source_id=symbol, title=f"{symbol} 实时行情状态",
+                    text=f"{symbol} 行情服务不可用，没有更新。", published_at=self.context.as_of,
+                    metadata={"status": "unavailable"})
+                return _dump({"documents": [document.model_dump(mode="json")], "message": "没有更新", "status": "unavailable"})
+
         def fetch_web_page(url: str) -> str:
             if self.context.run_kind != "interactive":
                 return _dump({"error": "Web retrieval is disabled for monitor runs"})
@@ -300,6 +336,12 @@ class ToolRegistry:
             return _dump({"report": _public_monitor_report(report) if report else None})
 
         return [
+            StructuredTool.from_function(
+                func=realtime_quote,
+                name="realtime_quote",
+                description="查询指定股票的最新行情快照；没有更新时明确反馈，历史行情仍使用 research_search。",
+                args_schema=RealtimeQuoteInput,
+            ),
             StructuredTool.from_function(
                 func=research_search,
                 name="research_search",

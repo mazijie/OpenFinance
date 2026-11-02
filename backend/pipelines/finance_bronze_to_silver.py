@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, time
 from hashlib import sha256
-from typing import Any
+from typing import Any, Callable
 
 from backend.ingestion.writers.bronze_writer import BronzeWriter
 from backend.lakehouse.finance_writer import FinanceWriter
@@ -60,7 +60,7 @@ class FinanceBronzeToSilverPipeline:
 
         return self.process_objects([object_path])
 
-    def process_objects(self, object_paths: list[str]) -> FinancePipelineStats:
+    def process_objects(self, object_paths: list[str], *, check_lease: Callable[[], None] | None = None) -> FinancePipelineStats:
         """Normalize a whole Bronze batch and commit each Silver table once."""
 
         paths = list(
@@ -82,6 +82,7 @@ class FinanceBronzeToSilverPipeline:
         # object therefore fails the job without leaving a partially applied
         # Bronze batch behind.
         for object_path in paths:
+            if check_lease: check_lease()
             object_security_records, object_calendar_records, object_daily_records, object_stats = (
                 self._normalize_object(object_path)
             )
@@ -109,8 +110,11 @@ class FinanceBronzeToSilverPipeline:
         )
         stats.duplicate_count += security_duplicates + calendar_duplicates + daily_duplicates
 
+        if check_lease: check_lease()
         stats.written_security_master = self.finance_writer.append_security_master(security_records)
+        if check_lease: check_lease()
         stats.written_trading_calendar = self.finance_writer.append_trading_calendar(calendar_records)
+        if check_lease: check_lease()
         stats.written_daily_bars = self.finance_writer.append_daily_bars(daily_records)
         logger.info(
             "Finance Bronze to Silver completed",

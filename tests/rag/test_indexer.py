@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from backend.rag.indexer import NewsRAGIndexer
 from backend.schemas.news import NewsArticleRecord
+import pytest
 
 
 class FakeNewsWriter:
@@ -31,7 +32,7 @@ class FakeVectorStore:
         return len(chunks)
 
     def chunks_for_content_hashes(self, content_hashes):
-        return []
+        return [item for item in self.upserted if item.content_hash in content_hashes]
 
     def clear(self):
         self.existing_hashes.clear()
@@ -95,3 +96,34 @@ def test_indexer_skips_weak_articles_and_index_eligible_news() -> None:
     assert stats.skipped_articles == 1
     assert stats.written_chunks >= 1
     assert len(vector_store.upserted) == stats.written_chunks
+
+
+def test_reconciliation_repairs_missing_chunks_after_partial_failure():
+    article = NewsArticleRecord(
+        news_id="n", provider="test", title="足够长的新闻标题用于测试",
+        summary="摘要内容" * 25, content="正文内容" * 150, url="https://example.com/n",
+        published_at=datetime(2026, 7, 18, tzinfo=UTC), ingested_at=datetime(2026, 7, 18, tzinfo=UTC),
+        content_hash="test-hash", raw_object_path="test.json")
+
+    class Lexical:
+        enabled = True
+        def __init__(self): self.ids = set(); self.fail = True
+        def ensure_index(self): pass
+        def existing_chunk_ids(self, ids): return self.ids.intersection(ids)
+        def upsert_chunks(self, chunks):
+            if chunks and self.fail:
+                self.ids.add(chunks[0].chunk_id)
+                self.fail = False
+                raise RuntimeError("partial bulk failure")
+            self.ids.update(chunk.chunk_id for chunk in chunks)
+        def close(self): pass
+
+    vector, lexical = FakeVectorStore(), Lexical()
+    indexer = NewsRAGIndexer(news_writer=FakeNewsWriter([article]), vector_store=vector,
+                             embedding_service=FakeEmbeddingService(), lexical_store=lexical)
+    with pytest.raises(RuntimeError, match="partial bulk"):
+        indexer.run()
+    result = indexer.run()
+    assert lexical.ids == {chunk.chunk_id for chunk in vector.upserted}
+    assert result.details["missing_vector_chunks"] == 0
+    assert indexer.run().details["repaired_lexical_chunks"] == 0

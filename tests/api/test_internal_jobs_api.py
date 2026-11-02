@@ -20,6 +20,17 @@ def test_internal_ingest_requires_token(monkeypatch) -> None:
     assert response.status_code == 403
 
 
+def test_calendar_sync_requires_token_and_runs_when_authorized(monkeypatch) -> None:
+    from backend.config import settings
+    monkeypatch.setattr(settings, "OPENFINANCE_INTERNAL_API_TOKEN", "internal-token")
+    monkeypatch.setattr("backend.ingestion.jobs.sync_trading_calendar.run", lambda: {"status": "success"})
+    client = TestClient(app)
+    assert client.post("/internal/jobs/trading-calendar-sync").status_code == 403
+    response = client.post("/internal/jobs/trading-calendar-sync", headers={"X-OpenFinance-Token": "internal-token"})
+    assert response.status_code == 200
+    assert response.json()["status"] == "success"
+
+
 def test_annual_report_bronze_manifest_listing_filters_and_verifies_pdf(monkeypatch) -> None:
     from backend.config import settings
 

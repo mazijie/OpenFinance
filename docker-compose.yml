@@ -1,4 +1,18 @@
 services:
+  spark-events-init:
+    image: ${SPARK_LEARNING_IMAGE:-openfinance-spark-learning:4.1.2-iceberg1.12}
+    build:
+      context: .
+      dockerfile: spark/Dockerfile
+      args:
+        SPARK_BASE_IMAGE: ${SPARK_BASE_IMAGE:-docker.1ms.run/apache/spark:4.1.2-python3}
+    user: root
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["mkdir -p /opt/openfinance/.cache/spark/events && chmod 777 /opt/openfinance/.cache/spark/events"]
+    volumes:
+      - .:/opt/openfinance
+    restart: "no"
+
   spark-master:
     image: ${SPARK_LEARNING_IMAGE:-openfinance-spark-learning:4.1.2-iceberg1.12}
     build:
@@ -7,7 +21,10 @@ services:
       args:
         SPARK_BASE_IMAGE: ${SPARK_BASE_IMAGE:-docker.1ms.run/apache/spark:4.1.2-python3}
     container_name: openfinance-spark-master
-    profiles: ["spark"]
+    restart: unless-stopped
+    depends_on:
+      spark-events-init:
+        condition: service_completed_successfully
     environment:
       ICEBERG_WAREHOUSE: ${ICEBERG_WAREHOUSE:-s3://openfinance-warehouse/}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
@@ -28,6 +45,7 @@ services:
       - "8081:8080"
     volumes:
       - .:/opt/openfinance
+      - ./spark/conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
     working_dir: /opt/openfinance
 
   spark-worker:
@@ -38,7 +56,7 @@ services:
       args:
         SPARK_BASE_IMAGE: ${SPARK_BASE_IMAGE:-docker.1ms.run/apache/spark:4.1.2-python3}
     container_name: openfinance-spark-worker
-    profiles: ["spark"]
+    restart: unless-stopped
     environment:
       ICEBERG_WAREHOUSE: ${ICEBERG_WAREHOUSE:-s3://openfinance-warehouse/}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
@@ -60,6 +78,23 @@ services:
     volumes:
       - .:/opt/openfinance
     working_dir: /opt/openfinance
+
+  spark-history-server:
+    image: ${SPARK_LEARNING_IMAGE:-openfinance-spark-learning:4.1.2-iceberg1.12}
+    container_name: openfinance-spark-history-server
+    user: root
+    restart: unless-stopped
+    depends_on:
+      spark-events-init:
+        condition: service_completed_successfully
+    command:
+      - /opt/spark/bin/spark-class
+      - org.apache.spark.deploy.history.HistoryServer
+    ports:
+      - "127.0.0.1:18080:18080"
+    volumes:
+      - .:/opt/openfinance:ro
+      - ./spark/conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
 
   backend:
     build:
@@ -469,6 +504,8 @@ services:
       dockerfile: airflow/Dockerfile
     container_name: openfinance-airflow-scheduler
     depends_on:
+      spark-events-init:
+        condition: service_completed_successfully
       airflow-init:
         condition: service_completed_successfully
       backend:

@@ -52,7 +52,7 @@ class PgVectorNewsStore:
     def ensure_schema(self) -> None:
         """Create schema, extension, table and index if they do not exist."""
 
-        with self._connection() as conn, conn.cursor() as cur:
+        with self._connection(register_types=False) as conn, conn.cursor() as cur:
             cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
             cur.execute(f"CREATE SCHEMA IF NOT EXISTS {self.schema}")
             ensure_vector_dimension(
@@ -84,7 +84,13 @@ class PgVectorNewsStore:
         if not wanted: return []
         with self._connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(f"SELECT chunk_id, news_id, external_news_id, provider, source_name, title, summary, content, url, published_at, ingested_at, language, symbols, entities, content_hash, raw_object_path, chunk_index, chunk_text, embedding FROM {self.fqtn} WHERE content_hash = ANY(%s)", (wanted,))
-            return [RagChunkRecord.model_validate(row) for row in cur.fetchall()]
+            rows = cur.fetchall()
+            for row in rows:
+                if hasattr(row["embedding"], "to_list"):
+                    row["embedding"] = row["embedding"].to_list()
+                elif hasattr(row["embedding"], "tolist"):
+                    row["embedding"] = row["embedding"].tolist()
+            return [RagChunkRecord.model_validate(row) for row in rows]
 
     def clear(self) -> None:
         with self._connection() as conn, conn.cursor() as cur: cur.execute(f"TRUNCATE TABLE {self.fqtn}")
@@ -230,11 +236,12 @@ class PgVectorNewsStore:
         return f"{self.schema}.{self.table}"
 
     @contextmanager
-    def _connection(self) -> Iterator[Any]:
+    def _connection(self, *, register_types: bool = True) -> Iterator[Any]:
         if psycopg is None or register_vector is None:
             raise RagStoreError("psycopg/pgvector dependencies are not installed")
         conn = psycopg.connect(self.dsn, autocommit=True)
-        register_vector(conn)
+        if register_types:
+            register_vector(conn)
         try:
             yield conn
         finally:

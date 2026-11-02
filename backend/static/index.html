@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content="OpenFinance Agent A 股行情与新闻研究工作台" />
     <title>OpenFinance Agent · 金融研究工作台</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=forward-quote-1" />
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js" defer></script>
-    <script src="/static/app.js" defer></script>
+    <script src="/static/app.js?v=forward-quote-1" defer></script>
   </head>
   <body>
     <header class="topbar">
@@ -22,7 +22,6 @@
         <nav class="page-nav" aria-label="主导航">
           <button class="nav-button active" type="button" data-page="marketPage" aria-current="page">行情、智能问答</button>
           <button class="nav-button" type="button" data-page="researchPage">新闻和财报</button>
-          <button class="nav-button" type="button" data-page="monitorPage">监测收件箱</button>
         </nav>
         <div class="topbar-status"><span class="status-light"></span><span id="systemStatus">数据服务就绪</span></div>
       </div>
@@ -31,37 +30,34 @@
     <main class="workspace">
       <section class="page-view active" id="marketPage" aria-label="行情与智能问答">
       <section class="market-panel panel" aria-label="A 股行情">
+        <section class="market-overview-card" aria-label="市场概览">
+          <div id="realtimeIndices" class="index-grid" aria-label="主要指数"></div>
+          <div id="realtimeMarketOverview" class="market-breadth" role="status" aria-live="polite">涨跌数据加载中…</div>
+        </section>
         <div class="section-heading">
           <div>
             <p class="eyebrow">MARKET OVERVIEW</p>
-            <h2>A 股日线行情</h2>
+            <h2>个股行情</h2>
           </div>
           <span class="data-badge" id="marketSourceBadge">等待查询</span>
         </div>
 
         <form class="market-query" id="marketForm">
-          <label class="field field-symbol">证券代码<select id="symbolInput" name="symbol" required><option value="" selected disabled>正在加载证券列表…</option></select></label>
-          <label class="field">开始日期<input id="startDateInput" name="start_date" type="date" required /></label>
-          <label class="field">结束日期<input id="endDateInput" name="end_date" type="date" required /></label>
-          <label class="field">复权口径<select id="adjustmentInput" name="adjustment_type"><option value="qfq" selected>前复权（qfq）</option><option value="hfq">后复权（hfq）</option><option value="none">不复权（none）</option></select></label>
-          <label class="field field-asof">数据截止时间（可选）<input id="asOfInput" name="as_of" type="datetime-local" /></label>
+          <div class="field field-symbol"><label for="securitySearch">证券</label><div class="security-picker"><input id="securitySearch" type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="securityResults" placeholder="正在加载证券列表…" autocomplete="off" disabled /><div id="securityResults" class="security-results" role="listbox" aria-label="证券搜索结果" hidden></div></div><select id="symbolInput" name="symbol" tabindex="-1" aria-hidden="true" required hidden><option value="" selected disabled>正在加载证券列表…</option></select></div>
         </form>
 
-        <div class="market-message" id="marketMessage" role="status">选择证券和日期后查询日线行情。</div>
-        <div class="stat-grid" id="marketStats" aria-live="polite"></div>
+        <div class="market-message" id="marketMessage" role="status">选择证券后查看行情。</div>
+        <div class="stock-price" aria-live="polite"><span>最新成交价</span><strong id="stockLastPrice">—</strong><strong id="stockChangePercent" class="stock-change"></strong><span class="stock-previous">昨收 <b id="stockPreviousClose">—</b></span><small id="stockPriceTime">等待行情</small></div>
+        <div class="stock-metrics" aria-live="polite"><div><span>成交量</span><strong id="stockVolume">—</strong></div><div><span>总市值</span><strong id="stockMarketCap">—</strong></div><div><span>市盈率</span><strong id="stockPe">—</strong></div></div>
 
         <div class="chart-card">
-          <div class="chart-heading"><div><h3>K 线与成交量</h3><p id="chartSubtitle">暂无数据</p></div><span class="chart-legend"><i class="legend-up"></i>上涨 <i class="legend-down"></i>下跌</span></div>
+          <div class="chart-heading"><div><div class="period-tabs" role="tablist" aria-label="行情周期"><button type="button" role="tab" data-period="intraday" aria-selected="false">分时</button><button type="button" role="tab" data-period="daily" aria-selected="true" class="active">日线</button><button type="button" role="tab" data-period="weekly" aria-selected="false">周线</button><button type="button" role="tab" data-period="monthly" aria-selected="false">月线</button></div><p id="chartSubtitle">暂无数据</p></div><span class="chart-legend"><i class="legend-up"></i>上涨 <i class="legend-down"></i>下跌</span></div>
           <div class="chart-wrap" id="marketChart" aria-label="日线 K 线图"></div>
           <div class="chart-empty" id="chartEmpty">暂无行情数据</div>
+          <div class="history-footer"><span id="historyStatus" role="status" aria-live="polite"></span><button id="loadOlderButton" class="secondary-button" type="button" hidden>加载更早行情</button></div>
         </div>
 
-        <div class="lineage-strip" id="lineageStrip"></div>
 
-        <div class="table-card">
-          <div class="table-heading"><h3>日线明细</h3><span id="barCount">0 条记录</span></div>
-          <div class="table-scroll"><table><thead><tr><th>交易日</th><th>开盘</th><th>最高</th><th>最低</th><th>收盘</th><th>成交量</th><th>状态</th></tr></thead><tbody id="barsTableBody"></tbody></table></div>
-        </div>
       </section>
 
         <section class="chat-panel panel" aria-label="Agent chat">

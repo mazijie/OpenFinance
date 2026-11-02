@@ -46,5 +46,8 @@ class FinanceService:
     def list_security_options(self) -> SecurityOptionsResult:
         return SecurityOptionsResult(items=self.repository.list_security_options())
 
+    def has_history_before(self, symbol: str, adjustment_type: str, before: date, as_of: datetime) -> bool:
+        return self.repository.writer.has_daily_bars_before(symbol=symbol, adjustment_type=adjustment_type, before=before, as_of=as_of)
+
     def is_trading_day(self, trading_date: date) -> bool | None:
         return self.repository.is_trading_day(trading_date)

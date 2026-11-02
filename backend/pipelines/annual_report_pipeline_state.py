@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator
@@ -50,8 +50,8 @@ class AnnualReportPipelineStateStore:
         if not self.dsn:
             raise AnnualReportPipelineStateError("DATABASE_URL is required for annual-report pipeline state")
 
-    def ensure_schema(self) -> None:
-        with self._connection() as conn, conn.transaction(), conn.cursor() as cur:
+    def ensure_schema(self, connection=None) -> None:
+        with (nullcontext(connection) if connection is not None else self._connection()) as conn, conn.transaction(), conn.cursor() as cur:
             cur.execute("CREATE SCHEMA IF NOT EXISTS openfinance")
             cur.execute(
                 """CREATE TABLE IF NOT EXISTS openfinance.annual_report_processing_state (
@@ -322,7 +322,7 @@ class AnnualReportPipelineStateStore:
             cur.execute(
                 "SELECT generation_id FROM openfinance.annual_report_index_generations WHERE status='retained' AND retain_until <= now()"
             )
-            return [str(row[0]) for row in cur.fetchall()]
+            return [str(row["generation_id"]) for row in cur.fetchall()]
 
     def delete_generation_record(self, generation_id: str) -> None:
         with self._connection() as conn, conn.transaction(), conn.cursor() as cur:

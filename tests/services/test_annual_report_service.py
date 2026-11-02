@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from uuid import NAMESPACE_URL, uuid5
+from types import SimpleNamespace
 
 from backend.schemas.annual_report import AnnualReportAnnouncement, AnnualReportBronzeObject, AnnualReportRecord
 from backend.services.annual_report_service import AnnualReportService
@@ -54,7 +55,7 @@ class FakeWriter:
         return self.rows
 
     def scan_parse_runs(self, report_id: str | None = None):
-        return []
+        return [SimpleNamespace(report_id=row.report_id, parse_run_id=row.parse_run_id, started_at=NOW, finished_at=NOW) for row in self.rows]
 
 
 def test_catalog_lists_bronze_pdf_before_silver_parse() -> None:
@@ -93,3 +94,15 @@ def test_catalog_prefers_silver_extraction_status_when_available() -> None:
 
     assert result.items[0].extraction_status == "needs_review"
     assert result.items[0].page_count == 100
+
+
+def test_uncommitted_projection_does_not_expose_region():
+    import pytest
+    manifest = _manifest()
+    class UncommittedWriter(FakeWriter):
+        def scan_parse_runs(self, report_id=None): return []
+        def scan_regions(self, **kwargs):
+            raise AssertionError("uncommitted regions must not be scanned")
+    service = AnnualReportService(writer=UncommittedWriter(), bronze_writer=FakeBronze(manifest))
+    with pytest.raises(LookupError):
+        service.get_region("missing", "region")

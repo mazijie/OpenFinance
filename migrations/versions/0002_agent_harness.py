@@ -16,7 +16,7 @@ depends_on = None
 
 
 def upgrade() -> None:
-    HarnessStore().ensure_schema()
+    HarnessStore().ensure_schema(connection=op.get_bind().connection.driver_connection)
 
 
 def downgrade() -> None:

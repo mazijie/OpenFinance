@@ -6,11 +6,11 @@ import argparse
 import json
 import signal
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from threading import current_thread, main_thread
 import time as time_module
-from typing import Iterator
+from typing import Callable, Iterator
 
 from backend.config import settings
 from backend.ingestion.writers.bronze_writer import BronzeWriter
@@ -31,6 +31,7 @@ class IngestAshareDailyBarsResult:
     adjustment_type: str
     processed_symbol_count: int
     failed_symbols: list[str]
+    no_data_symbols: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -47,6 +48,7 @@ def ingest_a_share_daily_bars(
     include_trading_calendar: bool = True,
     provider: BaoStockFinanceProvider | None = None,
     writer: BronzeWriter | None = None,
+    check_lease: Callable[[], None] | None = None,
 ) -> IngestAshareDailyBarsResult:
     """Collect A-share master data, trading calendar and daily bars into Bronze."""
 
@@ -61,14 +63,17 @@ def ingest_a_share_daily_bars(
     daily_bars = []
     processed_symbols = 0
     failed_symbols: list[str] = []
+    no_data_symbols: list[str] = []
 
     for index, symbol in enumerate(normalized_symbols, start=1):
+        if check_lease: check_lease()
         logger.info(
             "A-share symbol ingestion started",
             event="a_share_symbol_ingestion_started",
             extra_fields={"symbol": symbol, "symbol_index": index, "symbol_count": len(normalized_symbols)},
         )
         for attempt in range(settings.BAOSTOCK_MAX_RETRIES + 1):
+            if check_lease: check_lease()
             try:
                 with _symbol_timeout(settings.BAOSTOCK_SYMBOL_TIMEOUT_SECONDS):
                     symbol_security_master = (
@@ -84,6 +89,8 @@ def ingest_a_share_daily_bars(
                     )
                 security_master.extend(symbol_security_master)
                 daily_bars.extend(symbol_daily_bars)
+                if not symbol_daily_bars:
+                    no_data_symbols.append(symbol)
                 processed_symbols += 1
                 logger.info(
                     "A-share symbol ingestion completed",
@@ -135,6 +142,7 @@ def ingest_a_share_daily_bars(
     trading_calendar = []
     if include_trading_calendar:
         for exchange in exchanges:
+            if check_lease: check_lease()
             trading_calendar.extend(
                 resolved_provider.fetch_trading_calendar(exchange=exchange, start_date=start_date, end_date=end_date)
             )
@@ -144,6 +152,7 @@ def ingest_a_share_daily_bars(
         "trading_calendar": [record.model_dump(mode="json") for record in trading_calendar],
         "daily_bars": [record.model_dump(mode="json") for record in daily_bars],
     }
+    if check_lease: check_lease()
     object_path = resolved_writer.write_finance_raw(
         provider=settings.FINANCE_DEFAULT_PROVIDER,
         raw_response=raw_response,
@@ -167,6 +176,7 @@ def ingest_a_share_daily_bars(
         adjustment_type=adjustment_type,
         processed_symbol_count=processed_symbols,
         failed_symbols=failed_symbols,
+        no_data_symbols=no_data_symbols,
     )
     logger.info(
         "A-share daily bars ingestion completed",

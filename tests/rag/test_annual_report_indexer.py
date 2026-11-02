@@ -14,6 +14,9 @@ def chunk(chunk_id, page_number, run='run-1'):
 
 
 class Writer:
+    def scan_parse_runs(self):
+        return [SimpleNamespace(report_id='report', parse_run_id='run-1', started_at=NOW, finished_at=NOW)]
+
     def scan_reports(self):
         return [SimpleNamespace(report_id='report', parse_run_id='run-1', extraction_status='needs_review', stock_code='600519.SH', report_year=2024, company_name=None, announcement_time=NOW, ingested_at=NOW)]
 
@@ -110,7 +113,7 @@ def test_versioned_index_writes_completed_embedding_batches_before_later_failure
             return [SimpleNamespace(report_id="report", parse_run_id="run-1", page_number=index, extraction_status="ok") for index in (1, 2)]
 
         def scan_parse_runs(self):
-            return [SimpleNamespace(parse_run_id="run-1")]
+            return [SimpleNamespace(report_id="report", parse_run_id="run-1", started_at=NOW, finished_at=NOW)]
 
         def scan_chunks(self):
             return [chunk("one", 1), chunk("two", 2)]

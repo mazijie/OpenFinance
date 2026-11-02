@@ -69,6 +69,7 @@ class RagTool(BaseTool):
             "articles": [article.model_dump(mode="json") for article in result.articles],
             "citations": [article.model_dump(mode="json") for article in result.articles],
             "message": result.message,
+            "warnings": result.warnings,
             "error_type": result.error_type,
             "error_stage": result.error_stage,
         }

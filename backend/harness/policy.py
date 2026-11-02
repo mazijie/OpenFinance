@@ -27,6 +27,7 @@ class HarnessBudget:
 
 READ_TOOLS = {
     "research_search",
+    "realtime_quote",
     "annual_report_search",
     "resolve_security",
     "list_watchlist",

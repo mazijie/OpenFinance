@@ -11,7 +11,7 @@ depends_on = None
 def upgrade() -> None:
     from backend.pipelines.annual_report_pipeline_state import AnnualReportPipelineStateStore
 
-    AnnualReportPipelineStateStore().ensure_schema()
+    AnnualReportPipelineStateStore().ensure_schema(connection=op.get_bind().connection.driver_connection)
 
 
 def downgrade() -> None:

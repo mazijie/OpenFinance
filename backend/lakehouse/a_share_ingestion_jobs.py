@@ -15,6 +15,7 @@ except ImportError:  # pragma: no cover - deployment dependency
     psycopg = None
 
 from backend.config import settings
+from backend.lakehouse.job_lease import JobLeaseLost
 
 
 class AShareIngestionJobError(Exception):
@@ -158,24 +159,28 @@ class AShareIngestionJobStore:
             return None
         return {"job_id": str(row[0]), "payload": row[1], "attempts": row[2]}
 
-    def complete(self, job_id: str, result: dict[str, Any]) -> None:
-        self._update(job_id, status="success", result=result, error=None)
+    def complete(self, job_id: str, result: dict[str, Any], attempt: int) -> None:
+        self._update(job_id, status="success", result=result, error=None, attempt=attempt)
 
-    def fail(self, job_id: str, error: str) -> None:
-        self._update(job_id, status="failed", result=None, error=error)
+    def fail(self, job_id: str, error: str, attempt: int) -> None:
+        self._update(job_id, status="failed", result=None, error=error, attempt=attempt)
 
-    def heartbeat(self, job_id: str) -> None:
+    def heartbeat(self, job_id: str, attempt: int) -> None:
         self.ensure_schema()
         with self._connection() as conn, conn.cursor() as cur:
-            cur.execute(f"UPDATE {self.fqtn} SET heartbeat_at = now() WHERE job_id = %s AND status = 'running'", (UUID(job_id),))
+            cur.execute(f"UPDATE {self.fqtn} SET heartbeat_at = now() WHERE job_id = %s AND status = 'running' AND attempts = %s", (UUID(job_id), attempt))
+            if cur.rowcount != 1:
+                raise JobLeaseLost(f"Job {job_id} attempt {attempt} no longer owns the lease")
 
-    def _update(self, job_id: str, *, status: str, result: dict[str, Any] | None, error: str | None) -> None:
+    def _update(self, job_id: str, *, status: str, result: dict[str, Any] | None, error: str | None, attempt: int) -> None:
         self.ensure_schema()
         with self._connection() as conn, conn.cursor() as cur:
             cur.execute(
-                f"UPDATE {self.fqtn} SET status = %s, result = %s::jsonb, error = %s, finished_at = now(), heartbeat_at = now() WHERE job_id = %s",
-                (status, json.dumps(result, ensure_ascii=False, default=str) if result is not None else "null", error, UUID(job_id)),
+                f"UPDATE {self.fqtn} SET status = %s, result = %s::jsonb, error = %s, finished_at = now(), heartbeat_at = now() WHERE job_id = %s AND status = 'running' AND attempts = %s",
+                (status, json.dumps(result, ensure_ascii=False, default=str) if result is not None else "null", error, UUID(job_id), attempt),
             )
+            if cur.rowcount != 1:
+                raise JobLeaseLost(f"Job {job_id} attempt {attempt} no longer owns the lease")
 
     @contextmanager
     def _connection(self) -> Iterator[Any]:

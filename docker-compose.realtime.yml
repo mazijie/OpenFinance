@@ -1,0 +1,121 @@
+services:
+  kafka:
+    profiles: ["realtime"]
+    image: ${REALTIME_KAFKA_IMAGE:-docker.1ms.run/apache/kafka:3.9.1}
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_LOG_RETENTION_HOURS: ${REALTIME_KAFKA_RETENTION_HOURS:-24}
+    volumes:
+      - realtime_kafka:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+  flink-jobmanager:
+    profiles: ["realtime"]
+    build:
+      context: .
+      dockerfile: realtime/Dockerfile.flink
+    command: jobmanager
+    depends_on:
+      flink-checkpoint-init: {condition: service_completed_successfully}
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        parallelism.default: 1
+        restart-strategy.type: fixed-delay
+        restart-strategy.fixed-delay.attempts: 10
+        restart-strategy.fixed-delay.delay: 5 s
+    ports: ["127.0.0.1:8083:8081"]
+    volumes: ["realtime_checkpoints:/opt/flink/checkpoints"]
+  flink-checkpoint-init:
+    profiles: ["realtime"]
+    build:
+      context: .
+      dockerfile: realtime/Dockerfile.flink
+    user: root
+    entrypoint: ["/bin/sh", "-c", "chown flink:flink /opt/flink/checkpoints"]
+    volumes: ["realtime_checkpoints:/opt/flink/checkpoints"]
+  flink-taskmanager:
+    profiles: ["realtime"]
+    build:
+      context: .
+      dockerfile: realtime/Dockerfile.flink
+    command: taskmanager
+    depends_on: [flink-jobmanager]
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 2
+        parallelism.default: 1
+    volumes: ["realtime_checkpoints:/opt/flink/checkpoints"]
+  flink-submit:
+    profiles: ["realtime"]
+    build:
+      context: .
+      dockerfile: realtime/Dockerfile.flink
+    depends_on:
+      kafka-init: {condition: service_completed_successfully}
+      flink-jobmanager: {condition: service_started}
+      flink-taskmanager: {condition: service_started}
+    environment:
+      QUOTE_LATENESS_SECONDS: ${QUOTE_LATENESS_SECONDS:-120}
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        parallelism.default: 1
+    volumes: ["./realtime/job.sql:/opt/flink/job.sql:ro", "./realtime/submit.sh:/opt/flink/submit.sh:ro"]
+    entrypoint: ["/bin/bash", "-c"]
+    command: ["exec /bin/bash /opt/flink/submit.sh"]
+    restart: on-failure
+  kafka-init:
+    profiles: ["realtime"]
+    image: ${REALTIME_KAFKA_IMAGE:-docker.1ms.run/apache/kafka:3.9.1}
+    depends_on:
+      kafka: {condition: service_healthy}
+    entrypoint: ["/bin/bash", "-c"]
+    command: ["for topic in quotes.raw quotes.latest quotes.windows quotes.market quotes.late; do /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic $$topic --partitions 3 --replication-factor 1 || exit 1; done"]
+  quote-collector:
+    profiles: ["realtime"]
+    build:
+      context: .
+      dockerfile: realtime/Dockerfile
+    depends_on:
+      kafka: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+      backend: {condition: service_started}
+    environment:
+      QUOTE_SYMBOLS: ${QUOTE_SYMBOLS:-600519.SH,000001.SZ}
+      QUOTE_MODE: ${QUOTE_MODE:-live}
+      DATABASE_URL: postgresql://openfinance:openfinance@postgres:5432/openfinance
+      CALENDAR_URL: http://backend:8000/internal/jobs/investment-monitor/trading-day
+      OPENFINANCE_INTERNAL_API_TOKEN: ${OPENFINANCE_INTERNAL_API_TOKEN:-replace-with-a-shared-internal-token}
+    command: ["python", "-m", "realtime.collector"]
+    restart: unless-stopped
+  quote-consumer:
+    profiles: ["realtime"]
+    build:
+      context: .
+      dockerfile: realtime/Dockerfile
+    depends_on:
+      kafka: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+      backend: {condition: service_started}
+    environment:
+      DATABASE_URL: postgresql://openfinance:openfinance@postgres:5432/openfinance
+    command: ["python", "-m", "realtime.consumer"]
+    restart: unless-stopped
+volumes:
+  realtime_kafka:
+  realtime_checkpoints:

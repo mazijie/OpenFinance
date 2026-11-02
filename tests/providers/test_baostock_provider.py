@@ -138,6 +138,19 @@ def test_baostock_universe_stops_at_covered_date() -> None:
     assert client.logged_in == 0
 
 
+def test_baostock_universe_can_ignore_daily_coverage() -> None:
+    store = FakeCoverageStore({date(2026, 8, 20)})
+    client = FakeBaoStockClient()
+
+    result = BaoStockFinanceProvider(client=client).list_a_share_symbols(
+        day=date(2026, 8, 20), coverage_store=store, ignore_coverage=True
+    )
+
+    assert result.status == "available"
+    assert result.symbols
+    assert store.queries == []
+
+
 def test_baostock_universe_empty_range_fails(monkeypatch) -> None:
     client = FakeBaoStockClient()
     client.query_all_stock = lambda day=None: FakeResultSet(["code", "tradeStatus"], [])  # type: ignore[method-assign]
@@ -165,3 +178,10 @@ def test_baostock_provider_fetches_calendar_and_daily_bars() -> None:
     assert bars[0].adjustment_factor == 1.01
     assert bars[1].is_suspended is True
     assert bars[1].is_st is True
+
+
+def test_calendar_rejects_unknown_status_instead_of_assuming_closed() -> None:
+    client = FakeBaoStockClient()
+    client.query_trade_dates = lambda **kwargs: FakeResultSet(["calendar_date", "is_trading_day"], [["2026-07-01", ""]])
+    with pytest.raises(FinanceProviderError, match="Invalid BaoStock trading-day status"):
+        BaoStockFinanceProvider(client=client).fetch_trading_calendar(exchange="SH", start_date=date(2026, 7, 1), end_date=date(2026, 7, 1))

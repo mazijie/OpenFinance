@@ -33,7 +33,9 @@ class RagService:
         """Run semantic retrieval and format the result."""
 
         try:
-            hits = self.repository.search(
+            search = getattr(self.repository, "search_with_warnings", None)
+            search = search if callable(search) else self.repository.search
+            response = search(
                 question=question,
                 symbol=symbol,
                 start_date=start_date,
@@ -41,10 +43,11 @@ class RagService:
                 as_of=as_of,
                 limit=limit,
             )
+            hits, warnings = response if isinstance(response, tuple) else (response, [])
         except (RagEmbeddingError, RagStoreError, LexicalStoreError, RerankerError) as exc:
             return RagSearchResult(message="检索服务暂不可用，未使用新闻证据生成结论。", error_type=type(exc).__name__, error_stage="retrieval")
         filtered_hits = filter_by_threshold(hits, reranker_enabled=settings.RAG_RERANK_ENABLED)
         articles = mmr_select(aggregate_articles(filtered_hits), filtered_hits, limit=limit)
         if not articles:
-            return RagSearchResult(hits=[], message=settings.NEWS_EMPTY_RESULT_MESSAGE)
-        return RagSearchResult(hits=filtered_hits, articles=articles, message=None)
+            return RagSearchResult(hits=[], message=settings.NEWS_EMPTY_RESULT_MESSAGE, warnings=warnings)
+        return RagSearchResult(hits=filtered_hits, articles=articles, message=None, warnings=warnings)

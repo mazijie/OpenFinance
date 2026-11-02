@@ -6,6 +6,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from backend.ingestion.writers.bronze_writer import BronzeWriter
 from backend.lakehouse.annual_report_writer import AnnualReportWriter
+from backend.lakehouse.annual_report_visibility import committed_reports
 from backend.schemas.annual_report import (
     AnnualReportBronzeObject,
     AnnualReportItem,
@@ -25,7 +26,7 @@ class AnnualReportService:
         # The catalog is intentionally sourced from Bronze. A PDF is a usable
         # asset as soon as its manifest and object are committed; extraction is
         # an independent capability whose status is merged when Silver exists.
-        silver_rows = {row.report_id: row for row in self.writer.scan_reports()}
+        silver_rows = committed_reports(self.writer.scan_reports(), self.writer.scan_parse_runs())
         rows = []
         for report_id, manifest in self._bronze_reports():
             silver = silver_rows.get(report_id)
@@ -42,9 +43,8 @@ class AnnualReportService:
         return AnnualReportPageResult(items=items, page=page, page_size=page_size, total=total, has_next=start + page_size < total)
 
     def get_page(self, report_id: str, page_number: int) -> AnnualReportPage:
-        reports = [row for row in self.writer.scan_reports() if row.report_id == report_id]
-        committed = {item.parse_run_id for item in self.writer.scan_parse_runs(report_id)}
-        active_run = reports[0].parse_run_id if reports and reports[0].parse_run_id in committed else None
+        reports = committed_reports(self.writer.scan_reports(), self.writer.scan_parse_runs(report_id))
+        active_run = reports[report_id].parse_run_id if report_id in reports else None
         pages = [page for page in self.writer.scan_pages(report_id) if page.page_number == page_number and page.parse_run_id == active_run]
         if not pages:
             raise LookupError("Annual report page not found")
@@ -52,9 +52,10 @@ class AnnualReportService:
         return AnnualReportPage(report_id=page.report_id, page_number=page.page_number, text=page.text, extraction_status=page.extraction_status, page_type=page.page_type, ir_page_path=page.ir_page_path)
 
     def get_region(self, report_id: str, region_id: str) -> AnnualReportRegion:
-        reports = [row for row in self.writer.scan_reports() if row.report_id == report_id]
-        committed = {item.parse_run_id for item in self.writer.scan_parse_runs(report_id)}
-        active_run = reports[0].parse_run_id if reports and reports[0].parse_run_id in committed else None
+        reports = committed_reports(self.writer.scan_reports(), self.writer.scan_parse_runs(report_id))
+        active_run = reports[report_id].parse_run_id if report_id in reports else None
+        if active_run is None:
+            raise LookupError("Annual report region not found")
         regions = [region for region in self.writer.scan_regions(report_id=report_id, parse_run_id=active_run) if region.region_id == region_id]
         if not regions:
             raise LookupError("Annual report region not found")
@@ -78,9 +79,9 @@ class AnnualReportService:
                 return self.bronze_writer.read_bytes(manifest.pdf_object_path)
         # Keep a Silver fallback for historical rows whose manifest catalog is
         # temporarily unavailable, while the normal path remains Bronze-first.
-        reports = [row for row in self.writer.scan_reports() if row.report_id == report_id]
-        if reports:
-            return self.bronze_writer.read_bytes(reports[0].pdf_object_path)
+        reports = committed_reports(self.writer.scan_reports(), self.writer.scan_parse_runs(report_id))
+        if report_id in reports:
+            return self.bronze_writer.read_bytes(reports[report_id].pdf_object_path)
         raise LookupError("Annual report not found")
 
     def _bronze_reports(self) -> list[tuple[str, AnnualReportBronzeObject]]:

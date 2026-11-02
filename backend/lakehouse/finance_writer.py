@@ -273,6 +273,14 @@ class FinanceWriter:
     def scan_daily_bars(self) -> list[DailyBarRecord]:
         return [DailyBarRecord.model_validate(row) for row in self._scan_arrow_table(self.daily_bars_table).to_pylist()]
 
+    def has_daily_bars_before(self, *, symbol: str, adjustment_type: str, before: date, as_of: datetime) -> bool:
+        """Check older history without materializing all earlier bars."""
+        from pyiceberg.expressions import And, EqualTo, LessThan, LessThanOrEqual
+        predicate = And(EqualTo("symbol", symbol), EqualTo("adjustment_type", adjustment_type),
+                        LessThan("trading_date", before), LessThanOrEqual("available_at", as_of),
+                        LessThanOrEqual("ingested_at", as_of))
+        return self.daily_bars_table.scan(row_filter=predicate, selected_fields=("trading_date",), limit=1).to_arrow().num_rows > 0
+
     def scan_daily_bars_for_query(
         self,
         *,

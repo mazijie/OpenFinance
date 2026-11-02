@@ -24,12 +24,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def create_spark(master: str | None = None) -> SparkSession:
-    builder = SparkSession.builder.appName("openfinance-daily-metrics")
+    builder = SparkSession.builder
     if master:
         builder = builder.master(master)
     return (
         builder.config("spark.sql.session.timeZone", "UTC")
-        .config("spark.sql.shuffle.partitions", "4")
         .getOrCreate()
     )
 

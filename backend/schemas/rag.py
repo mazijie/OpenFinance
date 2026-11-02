@@ -91,6 +91,7 @@ class RagSearchResult(BaseModel):
 
     hits: list[RagSearchHit] = Field(default_factory=list)
     articles: list[RagArticleResult] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
     message: str | None = None
     error_type: str | None = None
     error_stage: str | None = None

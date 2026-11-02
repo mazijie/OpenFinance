@@ -37,7 +37,7 @@ def _request(path: str, *, method: str = "GET", payload: dict[str, object] | Non
     schedule=CronDataIntervalTimetable(
         os.getenv("INVESTMENT_MONITOR_AIRFLOW_SCHEDULE", "0 20 * * 1-5"),
         timezone="Asia/Shanghai",
-    ),
+    ) if os.getenv("INVESTMENT_MONITOR_SCHEDULE_ENABLED", "false").lower() == "true" else None,
     start_date=pendulum.datetime(2026, 10, 1, tz="Asia/Shanghai"),
     catchup=False,
     max_active_runs=1,

@@ -7,6 +7,7 @@ from typing import Any, Iterator
 from uuid import UUID, uuid4
 import psycopg
 from backend.config import settings
+from backend.lakehouse.job_lease import JobLeaseLost
 
 class FinanceNormalizationJobStore:
     _schema = "openfinance"
@@ -37,10 +38,11 @@ class FinanceNormalizationJobStore:
         if row is None:return None
         keys=("job_id","status","result","error","attempts","created_at","started_at","finished_at")
         return {k:(v.isoformat() if isinstance(v,datetime) else str(v) if isinstance(v,UUID) else v) for k,v in zip(keys,row,strict=True)}
-    def heartbeat(self, jid: str) -> None:
+    def heartbeat(self, jid: str, attempt: int) -> None:
         self.ensure_schema()
         with self._connection() as c, c.cursor() as cur:
-            cur.execute(f"UPDATE {self.fqtn} SET heartbeat_at=now() WHERE job_id=%s AND status='running'", (UUID(jid),))
+            cur.execute(f"UPDATE {self.fqtn} SET heartbeat_at=now() WHERE job_id=%s AND status='running' AND attempts=%s", (UUID(jid), attempt))
+            if cur.rowcount != 1: raise JobLeaseLost(f"Job {jid} attempt {attempt} no longer owns the lease")
     def claim(self, stale_after_seconds: int | None = None) -> dict[str, Any] | None:
         self.ensure_schema()
         stale_seconds = (
@@ -51,7 +53,9 @@ class FinanceNormalizationJobStore:
         with self._connection() as c, c.cursor() as cur:
             cur.execute(f"WITH candidate AS (SELECT job_id FROM {self.fqtn} WHERE status='queued' OR (status='running' AND heartbeat_at < now()-interval '{int(stale_seconds)} seconds') ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE {self.fqtn} j SET status='running',attempts=j.attempts+1,started_at=COALESCE(j.started_at,now()),heartbeat_at=now(),error=NULL FROM candidate WHERE j.job_id=candidate.job_id RETURNING j.job_id,j.payload,j.attempts"); row=cur.fetchone()
         return None if row is None else {"job_id":str(row[0]),"payload":row[1],"attempts":row[2]}
-    def _update(self,jid,status,result=None,error=None):
-        with self._connection() as c, c.cursor() as cur: cur.execute(f"UPDATE {self.fqtn} SET status=%s,result=%s::jsonb,error=%s,finished_at=now(),heartbeat_at=now() WHERE job_id=%s",(status,json.dumps(result,default=str) if result is not None else "null",error,UUID(jid)))
-    def complete(self,jid,result): self._update(jid,"success",result=result)
-    def fail(self,jid,error): self._update(jid,"failed",error=error)
+    def _update(self,jid,status,attempt,result=None,error=None):
+        with self._connection() as c, c.cursor() as cur:
+            cur.execute(f"UPDATE {self.fqtn} SET status=%s,result=%s::jsonb,error=%s,finished_at=now(),heartbeat_at=now() WHERE job_id=%s AND status='running' AND attempts=%s",(status,json.dumps(result,default=str) if result is not None else "null",error,UUID(jid),attempt))
+            if cur.rowcount != 1: raise JobLeaseLost(f"Job {jid} attempt {attempt} no longer owns the lease")
+    def complete(self,jid,result,attempt): self._update(jid,"success",attempt,result=result)
+    def fail(self,jid,error,attempt): self._update(jid,"failed",attempt,error=error)

@@ -29,6 +29,14 @@ from backend.schemas.monitor import MonitorRunAccepted, MonitorRunRequest
 router = APIRouter(prefix="/internal/jobs", tags=["internal-jobs"])
 
 
+@router.post("/trading-calendar-sync", status_code=status.HTTP_200_OK)
+def sync_trading_calendar(x_openfinance_token: str | None = Header(default=None)) -> dict[str, object]:
+    """Refresh the local calendar from BaoStock."""
+    _require_internal_token(x_openfinance_token)
+    from backend.ingestion.jobs.sync_trading_calendar import run
+    return run()
+
+
 @router.post("/ingest-a-share-daily-bars/submit", status_code=status.HTTP_202_ACCEPTED)
 def submit_ingest_a_share_daily_bars(
     request: IngestAshareDailyBarsRequest,
@@ -76,6 +84,7 @@ def _require_internal_token(x_openfinance_token: str | None) -> None:
 @router.get("/list-a-share-symbols", status_code=status.HTTP_200_OK)
 def list_a_share_symbols(
     adjustment_type: str = Query(default=settings.FINANCE_DEFAULT_ADJUSTMENT_TYPE),
+    ignore_coverage: bool = Query(default=False),
     x_openfinance_token: str | None = Header(default=None),
 ) -> dict[str, object]:
     """Return the current ordinary A-share universe for Airflow batch planning."""
@@ -83,9 +92,10 @@ def list_a_share_symbols(
     from backend.providers.finance import BaoStockFinanceProvider
 
     _require_internal_token(x_openfinance_token)
-    result = BaoStockFinanceProvider().list_a_share_symbols(
-        adjustment_type=adjustment_type,
-    )
+    options = {"adjustment_type": adjustment_type}
+    if ignore_coverage:
+        options["ignore_coverage"] = True
+    result = BaoStockFinanceProvider().list_a_share_symbols(**options)
     return {
         "status": result.status,
         "as_of_date": result.as_of_date.isoformat(),

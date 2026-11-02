@@ -51,6 +51,7 @@ def gold_metrics_pipeline():
         task_id="refresh_gold_incremental",
         bash_command=(
             "spark-submit "
+            "--name openfinance-gold-metrics "
             "--master spark://spark-master:7077 "
             "--deploy-mode client "
             "--jars /opt/airflow/extra-jars/iceberg-spark-runtime-4.1_2.13-1.12.0.jar,"

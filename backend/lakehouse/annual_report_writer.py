@@ -200,11 +200,11 @@ class AnnualReportWriter:
             }[table_name]
 
         keys = {
-            "annual_reports": ["report_id"],
+            "annual_reports": ["report_id", "parse_run_id"],
             "annual_report_pages": ["report_id", "parse_run_id", "page_number"],
-            "annual_report_sections": ["section_id"],
+            "annual_report_sections": ["report_id", "parse_run_id", "section_id"],
             "annual_report_parse_runs": ["parse_run_id"],
-            "annual_report_regions": ["region_id"],
+            "annual_report_regions": ["report_id", "parse_run_id", "region_id"],
             "annual_report_chunks": ["chunk_id"],
         }
         upsert_with_retry(reload_table, arrow_table, table_name=table_name, join_cols=keys[table_name])

@@ -52,7 +52,7 @@ def migration_tables(suffix: str) -> list[MigrationTable]:
     ]
 
 
-def deduplicate_daily_bars(df: DataFrame) -> DataFrame:
+def deduplicate_daily_bars(df: DataFrame, partitions: int = 4) -> DataFrame:
     key_window = Window.partitionBy(
         "provider",
         "adjustment_type",
@@ -69,7 +69,7 @@ def deduplicate_daily_bars(df: DataFrame) -> DataFrame:
         .filter(F.col("_row_number") == 1)
         .drop("_row_number")
         .repartition(
-            4,
+            partitions,
             "exchange",
             "provider",
             F.date_trunc("month", F.col("trading_date")),
@@ -77,7 +77,7 @@ def deduplicate_daily_bars(df: DataFrame) -> DataFrame:
     )
 
 
-def deduplicate_security_master(df: DataFrame) -> DataFrame:
+def deduplicate_security_master(df: DataFrame, partitions: int = 4) -> DataFrame:
     key_window = Window.partitionBy("provider", "security_id").orderBy(
         F.col("available_at").desc_nulls_last(),
         F.col("ingested_at").desc_nulls_last(),
@@ -88,11 +88,11 @@ def deduplicate_security_master(df: DataFrame) -> DataFrame:
         df.withColumn("_row_number", F.row_number().over(key_window))
         .filter(F.col("_row_number") == 1)
         .drop("_row_number")
-        .repartition(4)
+        .repartition(partitions)
     )
 
 
-def deduplicate_trading_calendar(df: DataFrame) -> DataFrame:
+def deduplicate_trading_calendar(df: DataFrame, partitions: int = 4) -> DataFrame:
     return (
         df.groupBy("exchange", "trading_date")
         .agg(
@@ -100,14 +100,14 @@ def deduplicate_trading_calendar(df: DataFrame) -> DataFrame:
             F.max("session_open_at").alias("session_open_at"),
             F.max("session_close_at").alias("session_close_at"),
         )
-        .repartition(4)
+        .repartition(partitions)
     )
 
 
-def build_frames(spark: SparkSession, tables: list[MigrationTable]) -> dict[str, DataFrame]:
-    daily_bars = deduplicate_daily_bars(spark.table(tables[0].name))
-    security_master = deduplicate_security_master(spark.table(tables[1].name))
-    trading_calendar = deduplicate_trading_calendar(spark.table(tables[2].name))
+def build_frames(spark: SparkSession, tables: list[MigrationTable], partitions: int = 4) -> dict[str, DataFrame]:
+    daily_bars = deduplicate_daily_bars(spark.table(tables[0].name), partitions)
+    security_master = deduplicate_security_master(spark.table(tables[1].name), partitions)
+    trading_calendar = deduplicate_trading_calendar(spark.table(tables[2].name), partitions)
     return {
         tables[0].name: daily_bars,
         tables[1].name: security_master,
@@ -146,7 +146,10 @@ def build_compacted_tables(
     spark: SparkSession,
     tables: list[MigrationTable],
     frames: dict[str, DataFrame],
+    distribution: str = "hash",
 ) -> dict[str, Any]:
+    if distribution not in {"hash", "none"}:
+        raise ValueError("Unsupported Iceberg write distribution")
     results: dict[str, Any] = {}
     key_columns = {
         tables[0].name: ["provider", "adjustment_type", "security_id", "trading_date"],
@@ -171,6 +174,7 @@ def build_compacted_tables(
             {table.partition_sql}
             TBLPROPERTIES (
               'format-version' = '2',
+              'write.distribution-mode' = '{distribution}',
               'write.target-file-size-bytes' = '134217728'
             )
             AS SELECT * FROM {view_name}

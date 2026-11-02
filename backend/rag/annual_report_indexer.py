@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+from contextlib import contextmanager
 
 from backend.config import settings
 from backend.lakehouse.annual_report_writer import AnnualReportWriter
 from backend.pipelines.annual_report_pipeline_state import AnnualReportPipelineStateStore, StageLease
 from backend.rag.annual_report_store import AnnualReportVectorStore
 from backend.rag.annual_report_lexical_store import AnnualReportLexicalStore
+from backend.lakehouse.annual_report_visibility import committed_reports
 from backend.rag.embeddings import EmbeddingService
 
 
@@ -35,12 +37,13 @@ class AnnualReportRAGIndexer:
 
     def run(self, *, rebuild_all: bool = False) -> dict[str, int | str]:
         if self._versioned:
-            return self._run_versioned(rebuild_all=rebuild_all)
+            with self._generation_lock():
+                return self._run_versioned(rebuild_all=rebuild_all)
         if rebuild_all:
             self.store.clear()
             self.lexical_store.clear()
         chunks_from_silver = self.writer.scan_chunks()
-        reports = {report.report_id: report for report in self.writer.scan_reports()}
+        reports = committed_reports(self.writer.scan_reports(), self.writer.scan_parse_runs())
         pages = self.writer.scan_pages()
         page_status = {(page.report_id, page.parse_run_id, page.page_number): page.extraction_status for page in pages}
         chunks: list[dict] = []
@@ -48,7 +51,7 @@ class AnnualReportRAGIndexer:
         for chunk in chunks_from_silver:
             report = reports.get(chunk.report_id)
             if report is None:
-                raise ValueError(f"Annual-report chunk {chunk.chunk_id} has no Silver report")
+                continue
             if chunk.parse_run_id != report.parse_run_id:
                 continue
             source_pages = range(chunk.page_start, chunk.page_end + 1)
@@ -94,14 +97,30 @@ class AnnualReportRAGIndexer:
             "written_lexical_chunks": lexical_written,
         }
 
+    @contextmanager
+    def _generation_lock(self):
+        if not isinstance(self.state_store, AnnualReportPipelineStateStore):
+            yield
+            return
+        with self.state_store._connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_lock(hashtextextended(%s, 0))", ("openfinance_annual_report_index",))
+            if not cur.fetchone()["pg_try_advisory_lock"]:
+                raise RuntimeError("Another annual report index build or cleanup is active")
+            try:
+                yield
+            finally:
+                cur.execute("SELECT pg_advisory_unlock(hashtextextended(%s, 0))", ("openfinance_annual_report_index",))
+
+    def _cleanup_generations(self):
+        self.lexical_store.delete_unversioned_documents()
+        for expired in self.state_store.expired_generations():
+            self.store.delete_generation(expired)
+            self.lexical_store.delete_generation(expired)
+            self.state_store.delete_generation_record(expired)
+
     def _run_versioned(self, *, rebuild_all: bool) -> dict[str, int]:
         chunks_from_silver = self.writer.scan_chunks()
-        committed_run_ids = {item.parse_run_id for item in self.writer.scan_parse_runs()}
-        reports = {
-            report.report_id: report
-            for report in self.writer.scan_reports()
-            if report.parse_run_id in committed_run_ids
-        }
+        reports = committed_reports(self.writer.scan_reports(), self.writer.scan_parse_runs())
         pages = self.writer.scan_pages()
         page_status = {(page.report_id, page.parse_run_id, page.page_number): page.extraction_status for page in pages}
         chunks: list[dict] = []
@@ -154,6 +173,7 @@ class AnnualReportRAGIndexer:
         active = self.state_store.get_active_generation()
         leases: list[StageLease] = []
         stage_version = f"{self.embedding_service.model_name}:{self.embedding_service.dimension}:{self.CHUNKER_VERSION}"
+        activated = False
         try:
             for report_id in sorted({item["report_id"] for item in chunks}):
                 report = reports[report_id]
@@ -167,6 +187,8 @@ class AnnualReportRAGIndexer:
                 count = self.store.count_generation(generation_id)
                 lexical_count = len(chunks) if not self.lexical_store.enabled else self.lexical_store.count_generation(generation_id)
                 if count == len(chunks) and lexical_count == len(chunks):
+                    activated = True
+                    self._cleanup_generations()
                     for lease in leases:
                         self.state_store.complete_stage(lease, output_ref=generation_id)
                     return {
@@ -258,13 +280,10 @@ class AnnualReportRAGIndexer:
                         raise RuntimeError("Index generation sample lexical retrieval failed")
             self.state_store.mark_generation_ready(generation_id, vector_chunks=vector_count, lexical_chunks=lexical_count)
             self.state_store.activate_generation(generation_id)
-            self.lexical_store.delete_unversioned_documents()
+            activated = True
             for lease in leases:
                 self.state_store.complete_stage(lease, output_ref=generation_id)
-            for expired in self.state_store.expired_generations():
-                self.store.delete_generation(expired)
-                self.lexical_store.delete_generation(expired)
-                self.state_store.delete_generation_record(expired)
+            self._cleanup_generations()
             return {
                 "scanned_sections": len(chunks_from_silver),
                 "chunk_count": len(chunks),
@@ -275,7 +294,8 @@ class AnnualReportRAGIndexer:
                 "generation_id": generation_id,
             }
         except Exception as exc:
-            self.state_store.fail_generation(generation_id, exc)
+            if not activated:
+                self.state_store.fail_generation(generation_id, exc)
             for lease in leases:
                 try:
                     self.state_store.fail_stage(lease, exc)

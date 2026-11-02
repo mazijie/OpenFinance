@@ -1,134 +1,35 @@
 # OpenFinance-Agent
 
-面向中国金融市场的开源研究助手，提供从数据入湖、指标计算到自然语言问答的完整能力。
+OpenFinance-Agent 是面向中国金融市场的数据处理与智能研究平台，覆盖金融数据采集、湖仓处理、作业调度、可观测性和基于证据的问答。
 
-## 主要功能
+## 数据架构
 
-### 金融数据入湖
+金融数据源 → Python Worker → MinIO Bronze → Silver（Iceberg）→ Spark Gold 指标 → 研究 API 与 Agent
 
-- 定时采集 A 股行情、财经新闻和上市公司年报
-- 支持 MinIO Bronze、Iceberg Silver 和 Gold 分层存储
-- 自动发现缺失证券和交易日，并按每日 API 配额渐进补数
-- 写入具备幂等性，任务重试不会产生重复业务数据
+- Airflow 负责采集与处理调度，PostgreSQL 保存任务状态及 Iceberg Catalog 元数据。
+- Spark 负责 Gold 指标计算与 Silver 重建，History Server 保存并展示作业事件。
+- 年报解析保留原文与可回溯的结构化结果；新闻和年报使用 PostgreSQL pgvector、OpenSearch 与 RAG 检索。
+- LangGraph Harness 提供持久化会话、工具调用、审批和可追溯引用。
 
-### 市场数据分析
+## 运行与作业观测
 
-- 查询单只股票的历史 K 线、成交量和成交额
-- 提供收益率、移动平均、波动率和成交量均值等日频指标
-- 支持股票列表、行情摘要和 Point-in-time 历史查询
-- 为全市场排名、因子筛选和事件研究预留 Gold 数据层
+参见 [金融数据处理与运行指南](docs/finance-pipeline-guide.md)、[Spark 作业与配置](spark/README.md) 和 [性能基准说明](spark/benchmark/README.md)。
+Spark Master、Worker 与 History Server 可通过 Docker Compose 启动。History Server 默认在
+http://localhost:18080，事件日志保存在 .cache/spark/events。
 
-### 新闻与年报检索
+监测入口和定时调度默认关闭，既有 API 与数据仍保留；历史功能见
+[投研监测](docs/investment-monitor.md)。Gold 更新调度独立运行。
 
-- 采集并标准化财经新闻
-- 支持 PostgreSQL pgvector 与 OpenSearch 混合检索
-- 支持年报 PDF 下载、正文提取、章节识别和页码引用
-- 年报 PDF 默认通过 Ray 和 MinerU 按页面/区域选择原生文本、表格或 OCR/布局解析；完整 IR 保存在 MinIO Derived，Silver 只保留检索和回溯字段
-- 回答中返回新闻、报告页码等可追溯证据
+## 后续方向
 
-### 金融研究 Agent
+实时行情流处理学习链路参见 [行情流处理指南](docs/realtime-quotes.md)。
 
-- 基于 LangGraph 编排行情、新闻和年报工具
-- 自动识别股票代码和问题类型
-- 支持行情分析、事件解释和年报问答
-- 数据不可用时明确返回限制，不绕过内部湖仓访问外部 API
-- 提供自建 Agent Harness：多线程会话、模型工具循环、预算、审批、取消和 SSE 流式事件
-- 新闻 RAG、年报 RAG、行情与白名单网页统一为一套证据和引用协议
-- 支持 A 股监护清单和收盘后 5/20 交易日方向与条件建议
-- 行情、新闻和年报按 `as_of` 时点检索，避免回测使用未来信息
-- 数据降级时不生成建议，模型输出经过 Schema、引用和风险提示校验
-
-### 调度与可靠性
-
-- 使用 Airflow 调度采集、标准化、索引和补数任务
-- 使用 PostgreSQL 持久化后台任务与每日 API 配额
-- 支持动态批处理、幂等重试和失败任务恢复
-- 提供 Spark、Iceberg 和 MinIO 数据处理链路
-- 使用 PostgreSQL 持久化监护清单、监测运行、报告和执行轨迹
-- 提供 `openfinance_gold_metrics_pipeline` 与 `openfinance_investment_monitor_pipeline`
-
-年报 Silver 回放使用 `openfinance_annual_report_bronze_replay` DAG。它只扫描已有 Bronze
-manifest，复用已有 Derived IR，然后写入当前 Silver 并重建 Gold，不会调用 CNInfo 或重复下载 PDF。
-例如只回放贵州茅台 2024 年报：
-
-```bash
-docker compose --profile airflow up -d airflow-init airflow-scheduler airflow-webserver
-docker exec openfinance-airflow-scheduler airflow dags trigger \
-  openfinance_annual_report_bronze_replay \
-  --conf '{"years":[2024],"stocks":["600519.SH"]}'
-```
-
-把 `stocks` 从配置中去掉即可回放该年份所有完整 Bronze manifest。首次回放没有 Derived IR
-的报告会走 GPU PDF 解析，任务可以在 Airflow 中按报告重试和观察状态。
-
-故障恢复、对账、`needs_review`、generation 切换和 Docker GPU 排查记录见
-[年报 Pipeline 故障与恢复记录](docs/annual-report-pipeline-recovery.md)。
-
-默认解析配置为 MinerU 4.0.12 的 `basic` 模式，依赖需安装在执行解析的 Ray worker 上。
-在本地 `.env` 中设置 `RAY_DASHBOARD_URL`，指向 backend 容器可访问的远程 Ray Dashboard 地址，
-例如 `http://<ray-server-host>:8265`。Ray worker 所需的存储地址也需要按 `.env.example` 配置为远程节点可访问的地址。
-更换模式或模型时应同时更新 `PDF_PARSER_VERSION`，避免复用不兼容的解析结果。
-可选的 `legacy-parser` Compose 服务仍使用其独立的 Paddle 环境，不参与默认 Ray 链路。
-
-## 投研监测
-
-运行链路：
-
-```text
-监护清单
-→ Gold 指标 + 新闻 RAG + 年报 RAG
-→ 确定性事件检测
-→ 有界 LangGraph 研判
-→ 站内监测收件箱
-```
-
-初始化监测表：
-
-```bash
-alembic upgrade head
-```
-
-监测 API：
-
-```text
-GET/POST       /api/watchlist
-PATCH/DELETE   /api/watchlist/{symbol}
-POST           /api/monitor/runs
-GET            /api/monitor/runs/{run_id}
-GET            /api/monitor/reports
-GET            /api/monitor/reports/{report_id}
-```
-
-工作日调度：
-
-- 19:30 Asia/Shanghai 增量刷新最近 45 天 Gold 指标。
-- 20:00 Asia/Shanghai 运行监护清单并生成收盘后报告。
-- Airflow 先检查本地交易日历，休市日跳过。
-- Gold 任务从 scheduler 以 Spark client 模式提交，镜像内置 Iceberg 与 PostgreSQL JAR。
-- `monitor-worker` 从 PostgreSQL 队列消费监测任务，多 worker 使用 `SKIP LOCKED` 竞争。
-
-构建并启动完整环境：
-
-```bash
-docker compose --profile airflow --profile spark up -d --build
-```
-
-### Shadow mode
-
-默认 `INVESTMENT_MONITOR_RECOMMENDATIONS_ENABLED=false`。Agent 仍将建议写入数据库供
-评估，但公开 API 和网页仅显示事件、证据与数据限制。至少积累 20 个交易日结果后运行：
-
-```bash
-python -m backend.monitoring.evaluation --since 2026-01-01
-```
-
-启用门槛为：5 日方向命中率至少 52%，20 日至少 55%，20 日扣除 20bp 往返成本后平均
-净收益为正，且相对 20 日动量基线至少提升 5 个百分点。通过后再将配置改为 `true`。
-
-交易建议只包含方向、触发与失效条件，不包含目标价、仓位或订单，也不会连接券商。
-数据未就绪时系统输出降级报告，不回退到外部行情或新闻接口。
+- 改进 Bronze 到 Silver 的历史回填、质量校验和故障恢复。
+- 复用 Harness 提供基于作业状态、性能指标和表元数据的只读诊断。
+- 扩展任务事件流、流处理与表格式对比能力。
 
 ## 统一研究 Harness
+
 
 主页面“行情、智能问答”是统一研究入口：
 
@@ -195,8 +96,7 @@ GET/POST/PATCH/DELETE /api/agent/web-domains
 ```
 
 `/api/chat` 保留为非流式兼容入口。启用统一入口使用 `HARNESS_V1_ENABLED=true`。
-监测任务从对话提交时会追加到当前线程；Airflow 和仪表盘提交会创建按交易日归档的系统线程，
-监测完成后报告卡自动写入该线程。
+历史监测报告继续保留在对话中。
 
 ### 外部网页边界
 
@@ -227,4 +127,4 @@ python -m backend.maintenance.prune_harness_checkpoints --days 30
 
 ## 说明
 
-本项目仅用于金融数据研究与技术学习，不构成投资建议。
+本项目提供金融数据与研究工具，不构成投资建议。

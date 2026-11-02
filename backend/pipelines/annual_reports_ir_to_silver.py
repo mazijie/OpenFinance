@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import NAMESPACE_URL, uuid5
+import hashlib
+import json
 import logging
 
 from backend.ingestion.writers.bronze_writer import BronzeWriter
@@ -86,6 +88,10 @@ class AnnualReportsIRToSilverPipeline:
             raise ValueError("parse result and Document IR parse_run_id do not match")
         if _required_string(ir, "report_id", "Document IR") != report_id:
             raise ValueError("parse result and Document IR report_id do not match")
+        force = result.get("force") is True
+        if force:
+            digest = hashlib.sha256(json.dumps(ir, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
+            parse_run_id = str(uuid5(NAMESPACE_URL, f"{parse_run_id}:silver-projection:{digest}"))
         quality_path = _required_string(result, "quality_object_path", "parse result")
         quality = self.derived_writer.read_json(quality_path)
         page_count = int(_required_value(result, "page_count", "parse result"))
@@ -112,7 +118,7 @@ class AnnualReportsIRToSilverPipeline:
             parser_version=parser_version,
             status=parse_status,
             started_at=datetime.fromisoformat(_required_string(ir, "started_at", "Document IR")),
-            finished_at=datetime.fromisoformat(_required_string(ir, "finished_at", "Document IR")),
+            finished_at=datetime.now(timezone.utc) if force else datetime.fromisoformat(_required_string(ir, "finished_at", "Document IR")),
             ir_object_path=ir_path,
         )
         report = AnnualReportRecord(
@@ -173,7 +179,7 @@ class AnnualReportsIRToSilverPipeline:
         sections_payload = ir.get("section_tree")
         if not isinstance(sections_payload, list):
             raise ValueError("Document IR section_tree must be a list")
-        sections = [AnnualReportSectionRecord.model_validate(section) for section in sections_payload]
+        sections = [AnnualReportSectionRecord.model_validate(section).model_copy(update={"parse_run_id": parse_run_id}) for section in sections_payload]
         chunks = build_ir_chunks(ir, report_id=report_id, parse_run_id=parse_run_id)
         projection = {
             "report_id": report_id,
@@ -194,15 +200,14 @@ class AnnualReportsIRToSilverPipeline:
                 stage="silver",
                 stage_version="annual-report-silver-v1",
             )
-        already_committed = parse_run_id in self._existing_parse_runs and result.get("force") is not True
+        already_committed = parse_run_id in self._existing_parse_runs
         try:
             if already_committed and self.report_writer.verify_projection(**projection):
                 if lease is not None:
                     self.state_store.complete_stage(lease, output_ref=ir_path)
                 return stats
-            if result.get("force") is True:
-                self.report_writer.remove_parse_run(parse_run_id)
-                self._existing_parse_runs.discard(parse_run_id)
+            if already_committed:
+                raise RuntimeError("Committed Silver projection is incomplete; create a new forced projection")
             self.report_writer.append_pages(pages)
             self.report_writer.append_regions(regions)
             self.report_writer.append_sections(sections)

@@ -69,6 +69,8 @@ def test_frontend_page_and_assets() -> None:
     assert "echarts" in page_response.text
     assert "marketChart" in page_response.text
     assert "monitorReportList" in page_response.text
+    assert 'data-page="monitorPage"' not in page_response.text
+    assert 'data-action="open-monitor-dashboard"' not in script_response.text
     assert 'id="marketPage"' in page_response.text
     assert "行情、智能问答" in page_response.text
     assert 'id="modelSettingsForm"' in page_response.text
