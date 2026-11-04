@@ -23,6 +23,16 @@ def test_split_batches_handles_partial_batch() -> None:
     assert module._split_batches(["a", "b", "c", "d", "e"], 2) == [["a", "b"], ["c", "d"], ["e"]]
 
 
+def test_tencent_source_is_preserved_in_both_plans():
+    module = _load_helpers_module()
+    plan = module.build_universe_plan({"status": "available", "provider": "tencent", "as_of_date": "2026-11-04", "symbols": ["600519.SH"]}, 20)
+    assert plan["provider"] == "tencent"
+    jobs = module.build_gap_ingest_jobs({"provider": "tencent", "adjustment_type": "qfq", "plans": [
+        {"symbol": "600519.SH", "start_date": "2026-11-01", "end_date": "2026-11-04", "missing_date_count": 3}
+    ]}, 20)
+    assert jobs[0]["window"]["daily_provider_name"] == "tencent"
+
+
 def test_split_batches_rejects_non_positive_size() -> None:
     module = _load_helpers_module()
     with pytest.raises(ValueError):
@@ -32,7 +42,7 @@ def test_split_batches_rejects_non_positive_size() -> None:
 def test_plan_preserves_available_universe_date() -> None:
     module = _load_helpers_module()
     plan = module.build_universe_plan({"status": "available", "as_of_date": "2026-08-20", "symbols": ["000001.SZ", "600519.SH", "300001.SZ"]}, 2)
-    assert plan == {"status": "available", "universe_as_of_date": "2026-08-20", "symbol_count": 3, "batches": [["000001.SZ", "600519.SH"], ["300001.SZ"]]}
+    assert plan == {"status": "available", "provider": "baostock", "universe_as_of_date": "2026-08-20", "symbol_count": 3, "batches": [["000001.SZ", "600519.SH"], ["300001.SZ"]]}
 
 
 def test_plan_handles_already_covered_without_batches() -> None:
@@ -61,6 +71,7 @@ def test_build_gap_ingest_jobs_groups_equal_windows() -> None:
                 "start_date": "2026-09-04",
                 "end_date": "2026-10-23",
                 "adjustment_type": "qfq",
+                "daily_provider_name": "baostock",
             },
             "missing_date_count": 60,
             "include_security_master": False,
@@ -71,6 +82,7 @@ def test_build_gap_ingest_jobs_groups_equal_windows() -> None:
                 "start_date": "2026-09-05",
                 "end_date": "2026-10-23",
                 "adjustment_type": "qfq",
+                "daily_provider_name": "baostock",
             },
             "missing_date_count": 29,
             "include_security_master": False,

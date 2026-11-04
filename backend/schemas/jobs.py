@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -31,6 +32,7 @@ class IngestAshareDailyBarsRequest(BaseModel):
     end_date: datetime
     adjustment_type: str = Field(default="qfq")
     idempotency_key: str | None = Field(default=None, max_length=256)
+    daily_provider_name: Literal["tencent", "baostock"] | None = None
     include_security_master: bool = True
     include_trading_calendar: bool = True
 

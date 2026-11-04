@@ -1,0 +1,19 @@
+# Apply only on the new server, with its own .env and empty finance warehouse.
+# docker compose -f docker-compose.yml -f docker-compose.server.yml up -d
+services:
+  backend:
+    environment:
+      FINANCE_DAILY_PROVIDER: tencent
+  backend-worker:
+    environment:
+      FINANCE_DAILY_PROVIDER: tencent
+    deploy:
+      replicas: ${A_SHARE_INGEST_WORKERS:-8}
+  airflow-webserver:
+    environment:
+      FINANCE_DAILY_PROVIDER: tencent
+      A_SHARE_MAX_ACTIVE_BATCHES: ${A_SHARE_MAX_ACTIVE_BATCHES:-8}
+  airflow-scheduler:
+    environment:
+      FINANCE_DAILY_PROVIDER: tencent
+      A_SHARE_MAX_ACTIVE_BATCHES: ${A_SHARE_MAX_ACTIVE_BATCHES:-8}

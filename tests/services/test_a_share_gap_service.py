@@ -80,7 +80,6 @@ class FakeWriter:
 
 def test_gap_plan_uses_one_range_per_symbol(monkeypatch) -> None:
     monkeypatch.setattr("backend.services.a_share_gap_service.settings.BAOSTOCK_DAILY_REQUEST_LIMIT", 50)
-    monkeypatch.setattr("backend.services.a_share_gap_service.settings.A_SHARE_REQUESTS_PER_SYMBOL", 2)
     monkeypatch.setattr("backend.services.a_share_gap_service.settings.A_SHARE_MAX_SYMBOLS_PER_RUN", 24)
     service = AShareGapService(
         writer=FakeWriter(),
@@ -114,7 +113,6 @@ def test_gap_plan_uses_one_range_per_symbol(monkeypatch) -> None:
 
 def test_gap_plan_returns_quota_exhausted_without_requesting_api(monkeypatch) -> None:
     monkeypatch.setattr("backend.services.a_share_gap_service.settings.BAOSTOCK_DAILY_REQUEST_LIMIT", 50)
-    monkeypatch.setattr("backend.services.a_share_gap_service.settings.A_SHARE_REQUESTS_PER_SYMBOL", 2)
     service = AShareGapService(
         writer=FakeWriter(),
         provider=object(),
@@ -134,7 +132,6 @@ def test_gap_plan_returns_quota_exhausted_without_requesting_api(monkeypatch) ->
 
 
 def test_gap_plan_does_not_refresh_calendar_when_closed_day_is_latest(monkeypatch) -> None:
-    monkeypatch.setattr("backend.services.a_share_gap_service.settings.A_SHARE_REQUESTS_PER_SYMBOL", 2)
     writer = FakeWriter()
     writer.calendar.append(
         TradingCalendarRecord(exchange="SZ", trading_date=date(2026, 1, 6), is_open=False)
@@ -156,7 +153,6 @@ def test_gap_plan_does_not_refresh_calendar_when_closed_day_is_latest(monkeypatc
 
 
 def test_gap_plan_excludes_dates_before_listing(monkeypatch) -> None:
-    monkeypatch.setattr("backend.services.a_share_gap_service.settings.A_SHARE_REQUESTS_PER_SYMBOL", 2)
     writer = FakeWriter()
     writer.security_master[1].list_date = date(2026, 1, 6)
     service = AShareGapService(writer=writer, provider=object(), budget_store=FakeBudget(10), universe_cache=FakeUniverseCache())
@@ -181,3 +177,35 @@ def test_missing_listing_date_does_not_report_complete() -> None:
     service = AShareGapService(writer=writer, provider=object(), budget_store=FakeBudget(10), universe_cache=FakeUniverseCache())
     result = service.plan(lookback_days=1, end_date=date(2026, 1, 5))
     assert result["status"] == "metadata_incomplete"
+
+
+def test_tencent_plan_keeps_metadata_budget_and_cache_separate(monkeypatch):
+    from backend.config import settings
+    monkeypatch.setattr(settings, "FINANCE_DAILY_PROVIDER", "tencent")
+    monkeypatch.setattr(settings, "TENCENT_DAILY_REQUEST_LIMIT", 0)
+    class Cache(FakeUniverseCache):
+        def get(self, *, provider, as_of_date):
+            assert provider == "baostock"
+            return super().get(provider=provider, as_of_date=as_of_date)
+    class Writer(FakeWriter):
+        def scan_daily_bar_keys(self, **kw):
+            assert kw["provider"] == "tencent"
+            return self.actual
+    service = AShareGapService(writer=Writer(), provider=object(), budget_store=FakeBudget(0), universe_cache=Cache())
+    result = service.plan(lookback_days=1, end_date=date(2026, 1, 5))
+    assert result["provider"] == "tencent" and result["remaining_budget"] is None
+    assert result["status"] == "available" and result["estimated_requests"] == 1
+
+
+def test_tencent_plan_counts_windows_and_honors_its_own_quota(monkeypatch):
+    from backend.config import settings
+    from backend.providers.daily_bars import estimate_daily_requests
+    monkeypatch.setattr(settings, "FINANCE_DAILY_PROVIDER", "tencent")
+    monkeypatch.setattr(settings, "TENCENT_DAILY_REQUEST_LIMIT", 1)
+    class Budget:
+        def remaining(self, *, provider, daily_limit):
+            return 0 if provider == "tencent" else 100
+    result = AShareGapService(writer=FakeWriter(), provider=object(), budget_store=Budget(),
+                             universe_cache=FakeUniverseCache()).plan(lookback_days=1, end_date=date(2026, 1, 5))
+    assert result["status"] == "quota_exhausted" and result["selected_symbol_count"] == 0
+    assert estimate_daily_requests("tencent", date(2001, 1, 1), date(2026, 1, 1)) > 2

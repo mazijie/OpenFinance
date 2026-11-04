@@ -11,6 +11,7 @@ from backend.lakehouse.api_request_budget import ApiRequestBudgetStore
 from backend.lakehouse.a_share_universe_cache import AShareUniverseCacheStore
 from backend.lakehouse.finance_writer import FinanceWriter
 from backend.providers.finance import BaoStockFinanceProvider
+from backend.providers.daily_bars import daily_request_limit, estimate_daily_requests
 from backend.schemas.finance import SecurityMasterRecord, TradingCalendarRecord
 
 
@@ -40,8 +41,8 @@ class AShareGapService:
         symbols: list[str] | None = None,
         mode: str = "daily",
     ) -> dict[str, Any]:
-        provider_name = settings.FINANCE_DEFAULT_PROVIDER
-        request_limit = settings.BAOSTOCK_DAILY_REQUEST_LIMIT
+        provider_name = settings.FINANCE_DAILY_PROVIDER
+        request_limit = daily_request_limit(provider_name)
         resolved_end = end_date or (datetime.now(ZoneInfo("Asia/Shanghai")).date() - timedelta(days=1))
         while resolved_end.weekday() >= 5:
             resolved_end -= timedelta(days=1)
@@ -57,7 +58,7 @@ class AShareGapService:
         securities = self.writer.scan_security_master()
         security_by_id = {security.security_id: security for security in securities}
         calendar = self.writer.scan_trading_calendar()
-        universe, universe_refresh_requests = self._load_universe(provider_name, resolved_end)
+        universe, universe_refresh_requests = self._load_universe("baostock", resolved_end)
         if not universe:
             raise ValueError("A-share universe is empty")
         requested_symbols = {symbol.strip().upper() for symbol in symbols or [] if symbol.strip()}
@@ -121,18 +122,27 @@ class AShareGapService:
             )
 
         missing.sort(key=lambda item: (item["start_date"], -item["missing_date_count"], item["symbol"]))
-        remaining_budget = self.budget_store.remaining(provider=provider_name, daily_limit=request_limit)
-        base_requests_per_symbol = max(1, settings.A_SHARE_REQUESTS_PER_SYMBOL)
+        remaining_budget = self.budget_store.remaining(provider=provider_name, daily_limit=request_limit) if request_limit > 0 else None
+        base_requests_per_symbol = estimate_daily_requests(provider_name, range_start, resolved_end)
+        metadata_budget = self.budget_store.remaining(provider="baostock", daily_limit=settings.BAOSTOCK_DAILY_REQUEST_LIMIT)
+        metadata_requests = 0
         selected: list[dict[str, Any]] = []
         estimated_requests = 0
         for item in missing:
             if len(selected) >= settings.A_SHARE_MAX_SYMBOLS_PER_RUN:
                 break
-            item_requests = base_requests_per_symbol + (1 if item["needs_metadata"] else 0)
-            if estimated_requests + item_requests > remaining_budget:
+            item_requests = estimate_daily_requests(provider_name, date.fromisoformat(item["start_date"]), date.fromisoformat(item["end_date"]))
+            if provider_name == "baostock":
+                item_requests += int(item["needs_metadata"])
+            elif item["needs_metadata"]:
+                if metadata_requests >= metadata_budget:
+                    continue
+            if remaining_budget is not None and estimated_requests + item_requests > remaining_budget:
                 continue
             selected.append(item)
             estimated_requests += item_requests
+            if provider_name != "baostock" and item["needs_metadata"]:
+                metadata_requests += 1
 
         unknown_metadata = [symbol for symbol in expected_symbols if symbol not in security_by_id or security_by_id[symbol].list_date is None]
         status = "available" if selected else "quota_exhausted" if missing else "metadata_incomplete" if unknown_metadata else "complete"
@@ -177,7 +187,7 @@ class AShareGapService:
         if not missing:
             return 0
         remaining = self.budget_store.remaining(
-            provider=settings.FINANCE_DEFAULT_PROVIDER, daily_limit=settings.BAOSTOCK_DAILY_REQUEST_LIMIT
+            provider="baostock", daily_limit=settings.BAOSTOCK_DAILY_REQUEST_LIMIT
         )
         refreshed = 0
         for exchange in exchanges:

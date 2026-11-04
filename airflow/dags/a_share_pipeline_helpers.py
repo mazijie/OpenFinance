@@ -178,6 +178,7 @@ def build_universe_plan(payload: dict[str, object], batch_size: int) -> dict[str
     return {
         "status": status,
         "universe_as_of_date": as_of_date,
+        "provider": str(payload.get("provider") or os.getenv("FINANCE_DAILY_PROVIDER", "baostock")),
         "symbol_count": len(symbols),
         "batches": _split_batches(symbols, batch_size) if status == "available" else [],
     }
@@ -210,6 +211,7 @@ def build_gap_ingest_jobs(plan: dict[str, object], batch_size: int) -> list[dict
                         "start_date": start_date,
                         "end_date": end_date,
                         "adjustment_type": adjustment_type,
+                        "daily_provider_name": str(plan.get("provider") or os.getenv("FINANCE_DAILY_PROVIDER", "baostock")),
                     },
                     "missing_date_count": sum(int(item["missing_date_count"]) for item in chunk),
                     "include_security_master": needs_metadata,

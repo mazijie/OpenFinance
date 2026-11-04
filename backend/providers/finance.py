@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from hashlib import sha256
@@ -55,6 +55,7 @@ class BaseFinanceProvider:
 class BaoStockFinanceProvider(BaseFinanceProvider):
     """BaoStock-backed provider."""
 
+    name = "baostock"
     _session_lock = threading.Lock()
 
     def __init__(self, client: Any | None = None, budget_store: Any | None = None) -> None:
@@ -105,6 +106,7 @@ class BaoStockFinanceProvider(BaseFinanceProvider):
         coverage_store: Any | None = None,
         adjustment_type: str = "qfq",
         ignore_coverage: bool = False,
+        coverage_provider: str | None = None,
     ) -> AShareUniverseResult:
         """Find a listed A-share universe, stopping at a completed coverage date."""
 
@@ -118,7 +120,7 @@ class BaoStockFinanceProvider(BaseFinanceProvider):
             raise FinanceProviderError("A_SHARE_UNIVERSE_LOOKBACK_DAYS must be positive")
         for _ in range(max_days):
             if not ignore_coverage and coverage_store.is_covered(
-                provider=settings.FINANCE_DEFAULT_PROVIDER,
+                provider=coverage_provider or settings.FINANCE_DAILY_PROVIDER,
                 adjustment_type=adjustment_type,
                 universe_as_of_date=candidate,
             ):
@@ -359,7 +361,13 @@ class BaoStockFinanceProvider(BaseFinanceProvider):
 
     @contextmanager
     def _session(self) -> Iterator[None]:
-        with self._session_lock:
+        session_lock = getattr(self.budget_store, "session_lock", None)
+        shared_lock = (
+            session_lock(provider=self.name)
+            if callable(session_lock)
+            else nullcontext()
+        )
+        with self._session_lock, shared_lock:
             previous_timeout = socket.getdefaulttimeout()
             socket.setdefaulttimeout(settings.BAOSTOCK_SOCKET_TIMEOUT_SECONDS)
             try:
@@ -388,6 +396,18 @@ class BaoStockFinanceProvider(BaseFinanceProvider):
         while result_set.next():
             row_data = list(result_set.get_row_data())
             rows.append({field: value for field, value in zip(fields, row_data, strict=False)})
+
+        # BaoStock returns False both at EOF and when fetching the next page
+        # fails. A full final page without an EOF response is incomplete too:
+        # socket failures can leave error_code unchanged at "0".
+        error_code = str(getattr(result_set, "error_code", "0"))
+        if error_code != "0":
+            error_msg = str(getattr(result_set, "error_msg", "unknown error"))
+            raise FinanceProviderError(f"BaoStock pagination failed: {error_code} {error_msg}")
+        page = getattr(result_set, "data", None)
+        page_size = int(getattr(result_set, "per_page_count", 0) or 0)
+        if page_size > 0 and page is not None and len(page) == page_size:
+            raise FinanceProviderError("BaoStock pagination stopped on a full page without confirming EOF")
         return rows
 
     def _reserve_requests(self, count: int) -> None:

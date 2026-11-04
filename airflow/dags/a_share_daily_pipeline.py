@@ -73,6 +73,7 @@ def a_share_daily_pipeline():
             "start_date": f"{window['start_date']}T00:00:00+00:00",
             "end_date": f"{window['end_date']}T00:00:00+00:00",
             "adjustment_type": window["adjustment_type"],
+            "daily_provider_name": window["daily_provider_name"],
             "idempotency_key": idempotency_key,
             "include_security_master": include_security_master,
             "include_trading_calendar": False,

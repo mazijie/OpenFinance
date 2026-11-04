@@ -44,8 +44,8 @@ def calculate_metrics(daily_bars: DataFrame) -> DataFrame:
     close_5 = security_window.rowsBetween(-4, 0)
     close_20 = security_window.rowsBetween(-19, 0)
 
-    valid_close = F.when(~F.col("is_suspended"), F.col("close"))
-    valid_volume = F.when(~F.col("is_suspended"), F.col("volume"))
+    valid_close = F.when(~F.coalesce(F.col("is_suspended"), F.lit(False)), F.col("close"))
+    valid_volume = F.when(~F.coalesce(F.col("is_suspended"), F.lit(False)), F.col("volume"))
 
     with_lags = (
         daily_bars.withColumn("close_lag_1", F.lag(valid_close, 1).over(security_window))
@@ -54,7 +54,7 @@ def calculate_metrics(daily_bars: DataFrame) -> DataFrame:
         .withColumn(
             "daily_return_1d",
             F.when(
-                (~F.col("is_suspended"))
+                (~F.coalesce(F.col("is_suspended"), F.lit(False)))
                 & F.col("close_lag_1").isNotNull()
                 & (F.col("close_lag_1") > 0),
                 F.col("close") / F.col("close_lag_1") - 1,
@@ -63,7 +63,7 @@ def calculate_metrics(daily_bars: DataFrame) -> DataFrame:
         .withColumn(
             "return_5d",
             F.when(
-                (~F.col("is_suspended"))
+                (~F.coalesce(F.col("is_suspended"), F.lit(False)))
                 & F.col("close_lag_5").isNotNull()
                 & (F.col("close_lag_5") > 0),
                 F.col("close") / F.col("close_lag_5") - 1,
@@ -72,7 +72,7 @@ def calculate_metrics(daily_bars: DataFrame) -> DataFrame:
         .withColumn(
             "return_20d",
             F.when(
-                (~F.col("is_suspended"))
+                (~F.coalesce(F.col("is_suspended"), F.lit(False)))
                 & F.col("close_lag_20").isNotNull()
                 & (F.col("close_lag_20") > 0),
                 F.col("close") / F.col("close_lag_20") - 1,

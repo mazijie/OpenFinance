@@ -156,6 +156,28 @@ def _bronze_payload() -> dict:
     }
 
 
+def test_tencent_nulls_and_negative_prices_survive_normalization():
+    payload = _bronze_payload()
+    payload["provider"] = "tencent"
+    payload["raw_response"]["security_master"][0]["provider"] = "baostock"
+    raw = payload["raw_response"]["daily_bars"][0]
+    raw.update(open=-10, close=-9, high=-8, low=-11, is_st=None, is_suspended=None, adjustment_factor=None)
+    payload["raw_response"]["daily_bars"] = [raw]
+    writer = FakeFinanceWriter()
+    pipeline = FinanceBronzeToSilverPipeline(bronze_writer=FakeBronzeWriter(payload), finance_writer=writer)
+    result = pipeline.process_object("finance/provider=tencent/sample.json")
+    assert result.written_daily_bars == 1
+    assert writer.security_master_records[0].provider == "baostock"
+    bar = writer.daily_bar_records[0]
+    assert bar.provider == "tencent" and bar.close == -9
+    assert bar.is_st is None and bar.is_suspended is None and bar.adjustment_factor is None
+    payload["request_params"]["adjustment_type"] = "none"
+    other = FakeFinanceWriter()
+    rejected = FinanceBronzeToSilverPipeline(bronze_writer=FakeBronzeWriter(payload), finance_writer=other)
+    assert rejected.process_object("finance/provider=tencent/invalid.json").filtered_count == 1
+    assert other.daily_bar_records == []
+
+
 def test_finance_pipeline_cleans_deduplicates_and_flags_suspension() -> None:
     writer = FakeFinanceWriter()
     pipeline = FinanceBronzeToSilverPipeline(bronze_writer=FakeBronzeWriter(_bronze_payload()), finance_writer=writer)

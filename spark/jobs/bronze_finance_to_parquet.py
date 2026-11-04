@@ -202,18 +202,9 @@ def normalize_daily_bars(bronze: DataFrame) -> DataFrame:
             ),
         )
         .withColumn(
-            "adjustment_factor",
-            F.coalesce(F.col("adjustment_factor"), F.lit(1.0)),
-        )
-        .withColumn(
-            "is_suspended",
-            F.coalesce(F.col("is_suspended"), F.lit(False)),
-        )
-        .withColumn("is_st", F.coalesce(F.col("is_st"), F.lit(False)))
-        .withColumn(
             "is_suspended",
             F.when(
-                (~F.col("is_suspended"))
+                (~F.coalesce(F.col("is_suspended"), F.lit(False)))
                 & (F.col("volume") == 0)
                 & (F.col("open") == 0)
                 & (F.col("high") == 0)
@@ -239,13 +230,11 @@ def normalize_daily_bars(bronze: DataFrame) -> DataFrame:
         & F.col("close").isNotNull()
         & F.col("volume").isNotNull()
     )
-    valid_numbers = (
-        (F.col("open") >= 0)
-        & (F.col("high") >= 0)
-        & (F.col("low") >= 0)
-        & (F.col("close") >= 0)
-        & (F.col("volume") >= 0)
-    )
+    finite_prices = F.lit(True)
+    for name in ("open", "high", "low", "close"):
+        finite_prices = finite_prices & ~F.isnan(name) & (F.abs(F.col(name)) < F.lit(float("inf")))
+    allowed_prices = F.col("adjustment_type").isin("qfq", "forward") | (F.least("open", "high", "low", "close") >= 0)
+    valid_numbers = finite_prices & allowed_prices & (F.col("volume") >= 0) & (F.col("volume") < F.lit(float("inf")))
     valid_ohlc = (
         (F.col("high") >= F.greatest("open", "low", "close"))
         & (F.col("low") <= F.least("open", "high", "close"))

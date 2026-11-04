@@ -9,6 +9,24 @@ from fastapi.testclient import TestClient
 from backend.main import app
 
 
+def test_queued_daily_job_freezes_selected_provider(monkeypatch):
+    from backend.config import settings
+    submitted = []
+    class Store:
+        def create(self, payload, idempotency_key=None):
+            submitted.append((payload, idempotency_key))
+            return "job-1"
+    monkeypatch.setattr("backend.lakehouse.a_share_ingestion_jobs.AShareIngestionJobStore", Store)
+    monkeypatch.setattr(settings, "FINANCE_DAILY_PROVIDER", "tencent")
+    monkeypatch.setattr(settings, "OPENFINANCE_INTERNAL_API_TOKEN", "internal-token")
+    response = TestClient(app).post("/internal/jobs/ingest-a-share-daily-bars/submit", headers={"X-OpenFinance-Token": "internal-token"}, json={
+        "symbols": ["600519.SH"], "start_date": "2026-11-01T00:00:00Z", "end_date": "2026-11-04T00:00:00Z", "idempotency_key": "test-job"
+    })
+    assert response.status_code == 202
+    assert submitted[0][0]["daily_provider_name"] == "tencent"
+    assert submitted[0][1] == "test-job"
+
+
 def test_internal_ingest_requires_token(monkeypatch) -> None:
     from backend.config import settings
 
@@ -122,6 +140,7 @@ def test_internal_a_share_universe_success(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json() == {
         "status": "available",
+        "provider": settings.FINANCE_DAILY_PROVIDER,
         "as_of_date": "2026-08-20",
         "symbols": ["000001.SZ", "600519.SH"],
         "symbol_count": 2,

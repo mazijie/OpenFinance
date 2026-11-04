@@ -1,5 +1,14 @@
 from __future__ import annotations
 
+
+def test_new_daily_schema_accepts_unknown_provider_fields():
+    import pytest
+    pytest.importorskip("pyarrow")
+    from backend.lakehouse.finance_tables import DAILY_BARS_ARROW_SCHEMA, DAILY_BARS_SCHEMA
+    for name in ("is_st", "is_suspended", "adjustment_factor"):
+        assert DAILY_BARS_ARROW_SCHEMA.field(name).nullable
+        assert not DAILY_BARS_SCHEMA.find_field(name).required
+
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor

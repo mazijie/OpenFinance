@@ -194,7 +194,7 @@ class FinanceRepository:
 
     def _adjustment_note(self, adjustment_type: str) -> str:
         if adjustment_type in {"qfq", "forward"}:
-            return "Prices are interpreted as forward-adjusted and kept with explicit adjustment factors."
+            return "Prices use the upstream forward adjustment; adjustment_factor is null when not supplied."
         if adjustment_type in {"hfq", "backward"}:
-            return "Prices are interpreted as backward-adjusted and kept with explicit adjustment factors."
+            return "Prices use the upstream backward adjustment; adjustment_factor is null when not supplied."
         return "Prices are stored without adjustment and must be interpreted together with adjustment_factor."

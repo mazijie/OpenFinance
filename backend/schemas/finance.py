@@ -93,9 +93,9 @@ class DailyBarRecord(FinanceMetadata):
     volume: float
     amount: float | None = None
     turnover: float | None = None
-    is_suspended: bool = False
-    is_st: bool = False
-    adjustment_factor: float = 1.0
+    is_suspended: bool | None = None
+    is_st: bool | None = None
+    adjustment_factor: float | None = None
     adjustment_type: str = "none"
 
 
@@ -180,9 +180,9 @@ class GoldMetricRecord(BaseModel):
     volume: float
     amount: float | None = None
     turnover: float | None = None
-    is_suspended: bool
-    is_st: bool
-    adjustment_factor: float
+    is_suspended: bool | None
+    is_st: bool | None
+    adjustment_factor: float | None
     daily_return_1d: float | None = None
     return_5d: float | None = None
     return_20d: float | None = None

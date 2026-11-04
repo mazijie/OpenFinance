@@ -102,6 +102,18 @@ class ApiRequestBudgetStore:
             )
         return int(row[0])
 
+    @contextmanager
+    def session_lock(self, *, provider: str) -> Iterator[None]:
+        """Keep provider login/query/logout sessions serial across processes."""
+
+        lock_name = f"openfinance_provider_session:{provider}"
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_lock(hashtextextended(%s, 0))", (lock_name,))
+            try:
+                yield
+            finally:
+                cur.execute("SELECT pg_advisory_unlock(hashtextextended(%s, 0))", (lock_name,))
+
     def ensure_schema(self) -> None:
         with self._connection() as conn, conn.cursor() as cur:
             cur.execute(f"CREATE SCHEMA IF NOT EXISTS {self._schema}")

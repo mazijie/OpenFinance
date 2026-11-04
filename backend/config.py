@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -64,6 +64,14 @@ class Settings(BaseSettings):
     ICEBERG_S3_PATH_STYLE_ACCESS: bool = True
 
     FINANCE_DEFAULT_PROVIDER: str = "baostock"
+    # Keep existing installations unchanged; the server template selects Tencent.
+    FINANCE_DAILY_PROVIDER: Literal["tencent", "baostock"] = "baostock"
+    TENCENT_CONNECT_TIMEOUT_SECONDS: float = Field(default=5.0, gt=0)
+    TENCENT_READ_TIMEOUT_SECONDS: float = Field(default=15.0, gt=0)
+    TENCENT_MAX_RETRIES: int = Field(default=2, ge=0, le=2)
+    TENCENT_RETRY_BACKOFF_SECONDS: float = Field(default=2.0, ge=0)
+    # Zero means no configured quota, not an assertion about upstream limits.
+    TENCENT_DAILY_REQUEST_LIMIT: int = Field(default=0, ge=0)
     FINANCE_DEFAULT_ADJUSTMENT_TYPE: str = "qfq"
     FINANCE_DEFAULT_LOOKBACK_DAYS: int = 30
     BAOSTOCK_SOCKET_TIMEOUT_SECONDS: float = 15.0
@@ -72,7 +80,6 @@ class Settings(BaseSettings):
     BAOSTOCK_RETRY_BACKOFF_SECONDS: float = 2.0
     BAOSTOCK_DAILY_REQUEST_LIMIT: int = 50_000
     A_SHARE_GAP_LOOKBACK_DAYS: int = 60
-    A_SHARE_REQUESTS_PER_SYMBOL: int = 2
     A_SHARE_MAX_SYMBOLS_PER_RUN: int = 10_000
     A_SHARE_INGEST_BATCH_SIZE: int = 20
     A_SHARE_NORMALIZATION_BATCH_SIZE: int = 10

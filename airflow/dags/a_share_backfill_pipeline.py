@@ -28,7 +28,7 @@ def a_share_backfill_pipeline():
 
     @task
     def build_ingest_jobs(plan: dict[str, object], window: dict[str, str]) -> list[dict[str, object]]:
-        return [{"batch": batch, "window": window} for batch in plan["batches"]]
+        return [{"batch": batch, "window": {**window, "daily_provider_name": plan["provider"]}} for batch in plan["batches"]]
 
     @task(retries=2, retry_delay=timedelta(minutes=5), max_active_tis_per_dag=int(os.getenv("A_SHARE_MAX_ACTIVE_BATCHES", "4")))
     def ingest(batch: list[str], window: dict[str, str]) -> dict[str, object]:
@@ -39,6 +39,7 @@ def a_share_backfill_pipeline():
             "start_date": f"{window['start_date']}T00:00:00+00:00",
             "end_date": f"{window['end_date']}T00:00:00+00:00",
             "adjustment_type": window["adjustment_type"],
+            "daily_provider_name": window["daily_provider_name"],
             "idempotency_key": idempotency_key,
         })
         result = _wait_for_a_share_ingestion(job_id)
@@ -64,7 +65,7 @@ def a_share_backfill_pipeline():
         if not summary["processed_batches"] or not summary["daily_bar_count"] or not (summary["written_daily_bars"] + summary["duplicate_count"]):
             raise ValueError("No valid A-share daily bars were written; coverage will not be recorded")
         context = get_current_context()
-        _post_internal_job("/internal/jobs/a-share-universe-coverage", {"provider": "baostock", "adjustment_type": window["adjustment_type"], "universe_as_of_date": plan["universe_as_of_date"], "universe_symbol_count": plan["symbol_count"], "processed_batches": summary["processed_batches"], "written_daily_bars": summary["written_daily_bars"], "dag_id": context["dag"].dag_id, "dag_run_id": context["run_id"]})
+        _post_internal_job("/internal/jobs/a-share-universe-coverage", {"provider": plan["provider"], "adjustment_type": window["adjustment_type"], "universe_as_of_date": plan["universe_as_of_date"], "universe_symbol_count": plan["symbol_count"], "processed_batches": summary["processed_batches"], "written_daily_bars": summary["written_daily_bars"], "dag_id": context["dag"].dag_id, "dag_run_id": context["run_id"]})
         return summary
 
     window = build_window()

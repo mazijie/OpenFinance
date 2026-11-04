@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, time
 from hashlib import sha256
@@ -212,7 +214,7 @@ class FinanceBronzeToSilverPipeline:
             list_date=list_date,
             delist_date=self._parse_date(row.get("delist_date")),
             status=str(row.get("status") or "active").strip().lower(),
-            provider=bronze_object.provider,
+            provider=str(row.get("provider") or bronze_object.provider),
             source_record_id=str(row.get("source_record_id") or security_id),
             source_version=str(row.get("source_version") or bronze_object.source_version or ""),
             payload_hash=str(row.get("payload_hash") or bronze_object.payload_hash or self._payload_hash(row)),
@@ -248,10 +250,10 @@ class FinanceBronzeToSilverPipeline:
         if not symbol or not exchange or trading_date is None:
             raise ValueError("daily bar missing key fields")
 
-        open_price = self._parse_float(row.get("open"))
-        high_price = self._parse_float(row.get("high"))
-        low_price = self._parse_float(row.get("low"))
-        close_price = self._parse_float(row.get("close"))
+        open_price = self._parse_price(row.get("open"))
+        high_price = self._parse_price(row.get("high"))
+        low_price = self._parse_price(row.get("low"))
+        close_price = self._parse_price(row.get("close"))
         volume = self._parse_float(row.get("volume"))
         amount = self._parse_optional_float(row.get("amount"))
         turnover = self._parse_optional_float(row.get("turnover"))
@@ -259,12 +261,14 @@ class FinanceBronzeToSilverPipeline:
 
         security_id = self._normalize_security_id(row.get("security_id"), symbol, exchange)
         adjustment_type = str(row.get("adjustment_type") or bronze_object.request_params.get("adjustment_type") or "qfq").strip().lower()
+        if adjustment_type not in {"qfq", "forward"} and min(open_price, high_price, low_price, close_price) < 0:
+            raise ValueError("negative prices require forward adjustment")
         source_record_id = str(row.get("source_record_id") or f"{symbol}-{trading_date.isoformat()}-{adjustment_type}")
         source_version = str(row.get("source_version") or bronze_object.source_version or "")
         payload_hash = str(row.get("payload_hash") or bronze_object.payload_hash or self._payload_hash(row))
         event_time = datetime.combine(trading_date, time.min, tzinfo=UTC)
 
-        is_suspended = bool(row.get("is_suspended", False))
+        is_suspended = row.get("is_suspended")
         if not is_suspended and volume == 0 and open_price == high_price == low_price == close_price == 0:
             is_suspended = True
 
@@ -281,8 +285,8 @@ class FinanceBronzeToSilverPipeline:
             amount=amount,
             turnover=turnover,
             is_suspended=is_suspended,
-            is_st=bool(row.get("is_st", False)),
-            adjustment_factor=self._parse_float(row.get("adjustment_factor", 1.0)),
+            is_st=row.get("is_st"),
+            adjustment_factor=self._parse_optional_float(row.get("adjustment_factor")),
             adjustment_type=adjustment_type,
             provider=bronze_object.provider,
             source_record_id=source_record_id,
@@ -304,8 +308,14 @@ class FinanceBronzeToSilverPipeline:
             return value.date()
         return date.fromisoformat(str(value))
 
-    def _parse_float(self, value: Any) -> float:
+    def _parse_price(self, value: Any) -> float:
         parsed = float(value)
+        if not math.isfinite(parsed):
+            raise ValueError("numeric field must be finite")
+        return parsed
+
+    def _parse_float(self, value: Any) -> float:
+        parsed = self._parse_price(value)
         if parsed < 0:
             raise ValueError("numeric field cannot be negative")
         return parsed

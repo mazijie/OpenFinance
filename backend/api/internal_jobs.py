@@ -48,6 +48,7 @@ def submit_ingest_a_share_daily_bars(
 
     _require_internal_token(x_openfinance_token)
     payload = request.model_dump(mode="json", exclude={"idempotency_key"})
+    payload["daily_provider_name"] = request.daily_provider_name or settings.FINANCE_DAILY_PROVIDER
     job_id = AShareIngestionJobStore().create(
         payload,
         idempotency_key=request.idempotency_key,
@@ -98,6 +99,7 @@ def list_a_share_symbols(
     result = BaoStockFinanceProvider().list_a_share_symbols(**options)
     return {
         "status": result.status,
+        "provider": settings.FINANCE_DAILY_PROVIDER,
         "as_of_date": result.as_of_date.isoformat(),
         "symbols": result.symbols,
         "symbol_count": len(result.symbols),
@@ -176,6 +178,7 @@ def trigger_ingest_a_share_daily_bars(
         idempotency_key=request.idempotency_key,
         include_security_master=request.include_security_master,
         include_trading_calendar=request.include_trading_calendar,
+        daily_provider_name=request.daily_provider_name or settings.FINANCE_DAILY_PROVIDER,
     )
     return result.to_dict()
 
