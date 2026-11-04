@@ -64,8 +64,8 @@ class Settings(BaseSettings):
     ICEBERG_S3_PATH_STYLE_ACCESS: bool = True
 
     FINANCE_DEFAULT_PROVIDER: str = "baostock"
-    # Keep existing installations unchanged; the server template selects Tencent.
-    FINANCE_DAILY_PROVIDER: Literal["tencent", "baostock"] = "baostock"
+    # Daily history is independent of BaoStock security metadata and calendars.
+    FINANCE_DAILY_PROVIDER: Literal["tencent", "baostock"] = "tencent"
     TENCENT_CONNECT_TIMEOUT_SECONDS: float = Field(default=5.0, gt=0)
     TENCENT_READ_TIMEOUT_SECONDS: float = Field(default=15.0, gt=0)
     TENCENT_MAX_RETRIES: int = Field(default=2, ge=0, le=2)

@@ -3,9 +3,16 @@ from __future__ import annotations
 from datetime import date
 import importlib
 
+import pytest
+
 from backend.ingestion.jobs.ingest_a_share_daily_bars import ingest_a_share_daily_bars
 from backend.providers.finance import InMemoryFinanceProvider
 from backend.schemas.finance import DailyBarRecord, SecurityMasterRecord, TradingCalendarRecord
+
+
+@pytest.fixture(autouse=True)
+def explicit_baostock_baseline(monkeypatch):
+    monkeypatch.setattr("backend.config.settings.FINANCE_DAILY_PROVIDER", "baostock")
 
 
 class FakeBronzeWriter:

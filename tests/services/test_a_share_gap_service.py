@@ -2,8 +2,16 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 
+import pytest
+
 from backend.schemas.finance import SecurityMasterRecord, TradingCalendarRecord
 from backend.services.a_share_gap_service import AShareGapService
+
+
+@pytest.fixture(autouse=True)
+def explicit_baostock_baseline(monkeypatch):
+    # Legacy BaoStock budget cases select their source independently of the default.
+    monkeypatch.setattr("backend.config.settings.FINANCE_DAILY_PROVIDER", "baostock")
 
 
 class FakeBudget:

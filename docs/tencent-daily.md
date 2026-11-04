@@ -2,7 +2,7 @@
 
 日线来源由 `FINANCE_DAILY_PROVIDER` 独立选择，支持 `tencent` 和 `baostock`。腾讯使用 `https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get`，证券目录、主数据和交易日历继续由 BaoStock 提供。腾讯请求不会获取 BaoStock 会话锁，也不会在失败后自动改用 BaoStock。
 
-为保持已有本机环境不变，未设置新配置时仍使用 BaoStock；新服务器的 `.env.example` 和 `docker-compose.server.yml` 显式选择腾讯。本次没有修改本机 `.env`，也没有启动、重启或触发业务采集任务。
+日线默认使用腾讯；本机 `.env`、新服务器的 `.env.example` 和 `docker-compose.server.yml` 均选择腾讯。Airflow 新建的回填和日常任务会固定该来源。已入队且显式指定来源的任务仍使用其已保存的来源。本次只切换配置，没有启动、重启或触发业务采集任务。
 
 ## 数据口径
 

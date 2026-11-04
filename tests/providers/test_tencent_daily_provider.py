@@ -6,9 +6,18 @@ from threading import Barrier
 import httpx
 import pytest
 
-from backend.config import settings
-from backend.providers.daily_bars import TencentDailyBarsProvider, daily_windows, estimate_daily_requests
+from backend.config import Settings, settings
+from backend.providers.daily_bars import TencentDailyBarsProvider, create_daily_provider, daily_windows, estimate_daily_requests
 from backend.providers.finance import FinanceProviderError
+
+
+def test_tencent_is_the_default_without_local_configuration(monkeypatch):
+    monkeypatch.delenv("FINANCE_DAILY_PROVIDER", raising=False)
+    config = Settings(_env_file=None)
+    assert config.FINANCE_DAILY_PROVIDER == "tencent"
+    monkeypatch.setattr(settings, "FINANCE_DAILY_PROVIDER", config.FINANCE_DAILY_PROVIDER)
+    with create_daily_provider() as provider:
+        assert isinstance(provider, TencentDailyBarsProvider)
 
 
 def row(day="2026-11-04", *, negative=False):
