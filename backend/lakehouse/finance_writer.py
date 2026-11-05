@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import datetime
 from datetime import date
+import time
 from typing import Any
 
 from backend.lakehouse.finance_tables import (
@@ -20,6 +21,7 @@ from backend.lakehouse.write_coordination import coordinated_write_with_retry, u
 from backend.schemas.finance import DailyBarRecord, SecurityMasterRecord, TradingCalendarRecord
 
 logger = get_logger(__name__)
+TRADING_CALENDAR_UPSERT_BATCH_SIZE = 256
 
 
 class _SimpleColumn:
@@ -73,15 +75,52 @@ class FinanceWriter:
     def append_trading_calendar(self, records: list[TradingCalendarRecord]) -> int:
         if not records:
             return 0
-        arrow_module = self._get_arrow_module()
-        arrow_table = arrow_module.Table.from_pylist([record.model_dump() for record in records], schema=TRADING_CALENDAR_ARROW_SCHEMA)
-        result = upsert_with_retry(
-            lambda: self._reload_trading_calendar(),
-            arrow_table,
-            table_name="trading_calendar",
-            join_cols=["exchange", "trading_date"],
+        started = time.monotonic()
+        written = [0]
+        result = coordinated_write_with_retry(
+            lambda: self._append_trading_calendar_locked(records, written), table_name="trading_calendar"
         )
-        return result.rows_inserted + result.rows_updated
+        logger.info("Trading calendar write completed", event="trading_calendar_write_completed",
+                    extra_fields={**result, "duration_seconds": round(time.monotonic() - started, 3)})
+        return result["written_count"]
+
+    def _append_trading_calendar_locked(self, records: list[TradingCalendarRecord], written: list[int]) -> dict[str, int]:
+        fields = ("exchange", "trading_date", "is_open", "session_open_at", "session_close_at")
+        rows = [record.model_dump() for record in records]
+        keys = [(row["exchange"], row["trading_date"]) for row in rows]
+        if len(set(keys)) != len(keys):
+            raise ValueError("Duplicate trading calendar keys in input")
+        table = self._reload_trading_calendar()
+        existing = {
+            (row["exchange"], row["trading_date"]): tuple(row[name] for name in fields)
+            for row in table.scan().select(*fields).to_arrow().to_pylist()
+        }
+        changed = []
+        new_count = changed_count = unchanged_count = 0
+        for row, key in zip(rows, keys, strict=True):
+            previous = existing.get(key)
+            if previous is None:
+                new_count += 1
+                changed.append(row)
+            elif previous != tuple(row[name] for name in fields):
+                changed_count += 1
+                changed.append(row)
+            else:
+                unchanged_count += 1
+        arrow_module = self._get_arrow_module()
+        for start in range(0, len(changed), TRADING_CALENDAR_UPSERT_BATCH_SIZE):
+            batch = changed[start : start + TRADING_CALENDAR_UPSERT_BATCH_SIZE]
+            arrow_table = arrow_module.Table.from_pylist(
+                batch, schema=TRADING_CALENDAR_ARROW_SCHEMA
+            )
+            result = self._reload_trading_calendar().upsert(
+                arrow_table,
+                join_cols=["exchange", "trading_date"],
+                snapshot_properties={"openfinance.write-mode": "upsert"},
+            )
+            written[0] += result.rows_inserted + result.rows_updated
+        return {"input_count": len(rows), "new_count": new_count, "changed_count": changed_count,
+                "unchanged_count": unchanged_count, "written_count": written[0]}
 
     def append_daily_bars(self, records: list[DailyBarRecord]) -> int:
         if not records:
@@ -175,6 +214,11 @@ class FinanceWriter:
         security_ids = sorted({security_id for _, _, security_id, _ in keys})
         trading_dates = sorted({trading_date for _, _, _, trading_date in keys})
 
+        logger.info(
+            "Scanning existing daily versions",
+            extra_fields={"key_count": len(keys), "security_count": len(security_ids),
+                          "date_count": len(trading_dates)},
+        )
         try:
             from pyiceberg.expressions import And, In
 
@@ -203,6 +247,7 @@ class FinanceWriter:
         except ImportError:  # pragma: no cover - test fallback without pyiceberg
             table = self._scan_arrow_table(self._reload_daily_bars())
 
+        logger.info("Existing daily versions scan completed", extra_fields={"row_count": table.num_rows})
         existing: dict[tuple[str, str, str, date], tuple[Any, Any, str, str]] = {}
         for row in table.to_pylist():
             key = (

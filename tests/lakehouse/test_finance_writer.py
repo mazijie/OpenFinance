@@ -16,7 +16,127 @@ from contextlib import contextmanager
 from threading import Lock
 
 from backend.lakehouse.finance_writer import FinanceWriter
-from backend.schemas.finance import DailyBarRecord
+from backend.schemas.finance import DailyBarRecord, TradingCalendarRecord
+
+
+def test_calendar_upserts_in_bounded_batches_and_counts_all_rows(monkeypatch) -> None:
+    from datetime import timedelta
+
+    writer = FinanceWriter.__new__(FinanceWriter)
+    writer._get_arrow_module = lambda: SimpleNamespace(
+        Table=SimpleNamespace(from_pylist=lambda rows, schema=None: rows)
+    )
+    batches = []
+
+    def fake_upsert(rows, *, join_cols, snapshot_properties):
+        assert join_cols == ["exchange", "trading_date"]
+        batches.append(rows)
+        return SimpleNamespace(rows_inserted=len(rows), rows_updated=0)
+
+    writer._reload_trading_calendar = lambda: SimpleNamespace(
+        scan=lambda: SimpleNamespace(select=lambda *args: SimpleNamespace(to_arrow=lambda: SimpleNamespace(to_pylist=lambda: []))),
+        upsert=fake_upsert,
+    )
+    monkeypatch.setattr("backend.lakehouse.finance_writer.coordinated_write_with_retry", lambda operation, **kwargs: operation())
+    records = [TradingCalendarRecord(exchange="SH", trading_date=date(2000, 1, 1) + timedelta(days=i), is_open=True)
+               for i in range(600)]
+    assert writer.append_trading_calendar(records) == 600
+    assert [len(batch) for batch in batches] == [256, 256, 88]
+    assert [row["trading_date"] for batch in batches for row in batch] == [r.trading_date for r in records]
+
+
+def test_calendar_replay_updates_only_changes_and_serializes_writers(monkeypatch) -> None:
+    writer = FinanceWriter.__new__(FinanceWriter)
+    writer._get_arrow_module = lambda: SimpleNamespace(Table=SimpleNamespace(from_pylist=lambda rows, schema=None: rows))
+    data = {}
+    lock = Lock()
+    writes = []
+
+    @contextmanager
+    def fake_lock():
+        with lock:
+            yield
+
+    class Table:
+        def scan(self):
+            return SimpleNamespace(select=lambda *args: SimpleNamespace(to_arrow=lambda: SimpleNamespace(to_pylist=lambda: list(data.values()))))
+
+        def upsert(self, rows, **kwargs):
+            writes.append(len(rows))
+            for row in rows:
+                data[(row["exchange"], row["trading_date"])] = dict(row)
+            return SimpleNamespace(rows_inserted=len(rows), rows_updated=0)
+
+    writer._reload_trading_calendar = Table
+    monkeypatch.setattr("backend.lakehouse.write_coordination.iceberg_write_lock", fake_lock)
+    original = TradingCalendarRecord(exchange="SH", trading_date=date(2026, 1, 1), is_open=True)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sorted(pool.map(lambda _: writer.append_trading_calendar([original]), range(2))) == [0, 1]
+    changed = original.model_copy(update={"is_open": False})
+    extra = TradingCalendarRecord(exchange="SZ", trading_date=date(2026, 1, 1), is_open=True)
+    assert writer.append_trading_calendar([changed, extra]) == 2
+    assert writer.append_trading_calendar([changed, extra]) == 0
+    assert writer.append_trading_calendar([]) == 0
+    assert writes == [1, 2]
+    assert data[("SH", date(2026, 1, 1))]["is_open"] is False
+
+
+def test_calendar_retry_after_partial_commit_only_writes_remaining_rows(monkeypatch) -> None:
+    from datetime import timedelta
+    from backend.lakehouse import write_coordination
+
+    writer = FinanceWriter.__new__(FinanceWriter)
+    writer._get_arrow_module = lambda: SimpleNamespace(Table=SimpleNamespace(from_pylist=lambda rows, schema=None: rows))
+    data, batches = {}, []
+    lock = Lock()
+
+    @contextmanager
+    def fake_lock():
+        with lock:
+            yield
+
+    class Table:
+        def scan(self):
+            return SimpleNamespace(select=lambda *args: SimpleNamespace(to_arrow=lambda: SimpleNamespace(to_pylist=lambda: list(data.values()))))
+
+        def upsert(self, rows, **kwargs):
+            batches.append(len(rows))
+            if len(batches) == 2:
+                raise write_coordination.CommitFailedException("retry test")
+            for row in rows:
+                data[(row["exchange"], row["trading_date"])] = dict(row)
+            return SimpleNamespace(rows_inserted=len(rows), rows_updated=0)
+
+    writer._reload_trading_calendar = Table
+    monkeypatch.setattr(write_coordination, "iceberg_write_lock", fake_lock)
+    monkeypatch.setattr(write_coordination.time, "sleep", lambda _: None)
+    records = [TradingCalendarRecord(exchange="SH", trading_date=date(2000, 1, 1) + timedelta(days=i), is_open=True) for i in range(300)]
+    assert writer.append_trading_calendar(records) == 300
+    assert batches == [256, 44, 44]
+    assert len(data) == 300
+
+
+def test_calendar_updates_existing_iceberg_table(tmp_path, monkeypatch) -> None:
+    import pytest
+    pytest.importorskip("pyiceberg")
+    pytest.importorskip("pyarrow")
+    from pyiceberg.catalog.sql import SqlCatalog
+    from backend.lakehouse.finance_tables import TRADING_CALENDAR_SCHEMA, TRADING_CALENDAR_PARTITION_SPEC
+
+    warehouse = tmp_path / "warehouse"
+    warehouse.mkdir()
+    catalog = SqlCatalog("test", uri=f"sqlite:///{tmp_path / 'catalog.db'}", warehouse=warehouse.as_uri())
+    catalog.create_namespace("test")
+    table = catalog.create_table("test.calendar", schema=TRADING_CALENDAR_SCHEMA,
+                                 partition_spec=TRADING_CALENDAR_PARTITION_SPEC)
+    writer = FinanceWriter.__new__(FinanceWriter)
+    writer._reload_trading_calendar = lambda: catalog.load_table("test.calendar")
+    monkeypatch.setattr("backend.lakehouse.finance_writer.coordinated_write_with_retry", lambda operation, **kwargs: operation())
+    day = TradingCalendarRecord(exchange="SH", trading_date=date(2026, 1, 1), is_open=True)
+    assert writer.append_trading_calendar([day]) == 1
+    assert writer.append_trading_calendar([day]) == 0
+    assert writer.append_trading_calendar([day.model_copy(update={"is_open": False})]) == 1
+    assert catalog.load_table("test.calendar").scan().to_arrow().to_pylist()[0]["is_open"] is False
 
 
 def _daily_bar(*, close: float = 10.0) -> DailyBarRecord:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import time as time_module
 
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, time
@@ -65,6 +66,7 @@ class FinanceBronzeToSilverPipeline:
     def process_objects(self, object_paths: list[str], *, check_lease: Callable[[], None] | None = None) -> FinancePipelineStats:
         """Normalize a whole Bronze batch and commit each Silver table once."""
 
+        process_started = time_module.monotonic()
         paths = list(
             dict.fromkeys(
                 str(path).strip()
@@ -111,17 +113,30 @@ class FinanceBronzeToSilverPipeline:
             ),
         )
         stats.duplicate_count += security_duplicates + calendar_duplicates + daily_duplicates
+        preparation_seconds = time_module.monotonic() - process_started
 
         if check_lease: check_lease()
+        stage_started = time_module.monotonic()
+        logger.info("Writing finance security master", extra_fields={"record_count": len(security_records)})
         stats.written_security_master = self.finance_writer.append_security_master(security_records)
+        security_seconds = time_module.monotonic() - stage_started
         if check_lease: check_lease()
+        stage_started = time_module.monotonic()
+        logger.info("Writing finance trading calendar", extra_fields={"record_count": len(calendar_records)})
         stats.written_trading_calendar = self.finance_writer.append_trading_calendar(calendar_records)
+        calendar_seconds = time_module.monotonic() - stage_started
         if check_lease: check_lease()
+        stage_started = time_module.monotonic()
+        logger.info("Writing finance daily bars", extra_fields={"record_count": len(daily_records)})
         stats.written_daily_bars = self.finance_writer.append_daily_bars(daily_records)
+        daily_seconds = time_module.monotonic() - stage_started
         logger.info(
             "Finance Bronze to Silver completed",
             event="finance_bronze_to_silver_completed",
-            extra_fields=stats.to_dict(),
+            extra_fields={**stats.to_dict(), "security_seconds": round(security_seconds, 3),
+                          "calendar_seconds": round(calendar_seconds, 3), "daily_seconds": round(daily_seconds, 3),
+                          "preparation_seconds": round(preparation_seconds, 3),
+                          "total_seconds": round(time_module.monotonic() - process_started, 3)},
         )
         return stats
 
