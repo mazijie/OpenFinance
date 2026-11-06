@@ -30,9 +30,9 @@ class IngestAshareDailyBarsRequest(BaseModel):
     symbols: list[str] = Field(default_factory=list, min_length=1)
     start_date: datetime
     end_date: datetime
-    adjustment_type: str = Field(default="qfq")
+    adjustment_type: Literal["none"] = "none"
     idempotency_key: str | None = Field(default=None, max_length=256)
-    daily_provider_name: Literal["tencent", "baostock"] | None = None
+    daily_provider_name: Literal["tencent"] | None = None
     include_security_master: bool = True
     include_trading_calendar: bool = True
 
@@ -52,7 +52,7 @@ class AShareGapPlanRequest(BaseModel):
     start_date: date | None = None
     symbols: list[str] | None = None
     mode: str = "daily"
-    adjustment_type: str = Field(default="qfq")
+    adjustment_type: Literal["none"] = "none"
     lookback_days: int | None = Field(default=None, ge=1, le=3660)
     end_date: date | None = None
 

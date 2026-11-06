@@ -156,6 +156,12 @@ class FinanceBronzeToSilverPipeline:
         security_master_payload = list(bronze_object.raw_response.get("security_master") or [])
         calendar_payload = list(bronze_object.raw_response.get("trading_calendar") or [])
         daily_bars_payload = list(bronze_object.raw_response.get("daily_bars") or [])
+        if str(bronze_object.provider).lower() == "baostock" and (security_master_payload or daily_bars_payload):
+            raise ValueError("BaoStock security and daily-bar replay is disabled; preserve calendar-only data separately")
+        if daily_bars_payload:
+            requested = str(bronze_object.request_params.get("adjustment_type") or "").lower()
+            if requested != "none" or any(str(row.get("adjustment_type") or requested).lower() != "none" for row in daily_bars_payload):
+                raise ValueError("Only explicitly unadjusted Bronze daily bars can be normalized")
         stats.read_count = len(security_master_payload) + len(calendar_payload) + len(daily_bars_payload)
 
         security_records: list[SecurityMasterRecord] = []
@@ -275,7 +281,7 @@ class FinanceBronzeToSilverPipeline:
         self._validate_bar_prices(open_price, high_price, low_price, close_price, volume)
 
         security_id = self._normalize_security_id(row.get("security_id"), symbol, exchange)
-        adjustment_type = str(row.get("adjustment_type") or bronze_object.request_params.get("adjustment_type") or "qfq").strip().lower()
+        adjustment_type = str(row.get("adjustment_type") or bronze_object.request_params.get("adjustment_type") or "none").strip().lower()
         if adjustment_type not in {"qfq", "forward"} and min(open_price, high_price, low_price, close_price) < 0:
             raise ValueError("negative prices require forward adjustment")
         source_record_id = str(row.get("source_record_id") or f"{symbol}-{trading_date.isoformat()}-{adjustment_type}")

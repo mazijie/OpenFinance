@@ -83,10 +83,10 @@ def test_lease_loss_stops_subsequent_silver_writes():
 def _bronze_payload() -> dict:
     return {
         "domain": "finance",
-        "provider": "baostock",
+        "provider": "tencent",
         "ingested_at": "2026-07-14T09:00:00Z",
         "source_version": "snapshot-1",
-        "request_params": {"adjustment_type": "qfq"},
+        "request_params": {"adjustment_type": "none"},
         "raw_response": {
             "security_master": [
                 {
@@ -156,26 +156,29 @@ def _bronze_payload() -> dict:
     }
 
 
-def test_tencent_nulls_and_negative_prices_survive_normalization():
+def test_tencent_nulls_survive_and_old_adjusted_payload_is_rejected():
     payload = _bronze_payload()
     payload["provider"] = "tencent"
-    payload["raw_response"]["security_master"][0]["provider"] = "baostock"
     raw = payload["raw_response"]["daily_bars"][0]
-    raw.update(open=-10, close=-9, high=-8, low=-11, is_st=None, is_suspended=None, adjustment_factor=None)
+    raw.update(is_st=None, is_suspended=None, adjustment_factor=None)
     payload["raw_response"]["daily_bars"] = [raw]
     writer = FakeFinanceWriter()
     pipeline = FinanceBronzeToSilverPipeline(bronze_writer=FakeBronzeWriter(payload), finance_writer=writer)
-    result = pipeline.process_object("finance/provider=tencent/sample.json")
-    assert result.written_daily_bars == 1
-    assert writer.security_master_records[0].provider == "baostock"
+    assert pipeline.process_object("finance/provider=tencent/sample.json").written_daily_bars == 1
     bar = writer.daily_bar_records[0]
-    assert bar.provider == "tencent" and bar.close == -9
+    assert bar.provider == "tencent" and bar.close == 1460
     assert bar.is_st is None and bar.is_suspended is None and bar.adjustment_factor is None
-    payload["request_params"]["adjustment_type"] = "none"
-    other = FakeFinanceWriter()
-    rejected = FinanceBronzeToSilverPipeline(bronze_writer=FakeBronzeWriter(payload), finance_writer=other)
-    assert rejected.process_object("finance/provider=tencent/invalid.json").filtered_count == 1
-    assert other.daily_bar_records == []
+    payload["request_params"]["adjustment_type"] = "qfq"
+    with pytest.raises(ValueError, match="explicitly unadjusted"):
+        pipeline.process_object("finance/provider=tencent/old.json")
+
+
+def test_baostock_market_replay_is_rejected():
+    payload = _bronze_payload()
+    payload["provider"] = "baostock"
+    pipeline = FinanceBronzeToSilverPipeline(bronze_writer=FakeBronzeWriter(payload), finance_writer=FakeFinanceWriter())
+    with pytest.raises(ValueError, match="replay is disabled"):
+        pipeline.process_object("old.json")
 
 
 def test_finance_pipeline_cleans_deduplicates_and_flags_suspension() -> None:

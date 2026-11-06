@@ -34,7 +34,9 @@ class MarketLakehouseTool(BaseTool):
         security_id = kwargs.get("security_id")
         start_date = kwargs.get("start_date")
         end_date = kwargs.get("end_date")
-        adjustment_type = str(kwargs.get("adjustment_type") or "qfq").strip().lower()
+        adjustment_type = str(kwargs.get("adjustment_type") or "none").strip().lower()
+        if adjustment_type != "none":
+            return build_error_result("Only unadjusted daily bars are supported")
         as_of = kwargs.get("as_of")
 
         try:
@@ -130,7 +132,7 @@ def get_market_data(
     security_id: str | None = None,
     start_date: date | None = None,
     end_date: date | None = None,
-    adjustment_type: str = "qfq",
+    adjustment_type: str = "none",
     as_of: datetime | None = None,
     service: FinanceService | None = None,
 ) -> ToolResult:

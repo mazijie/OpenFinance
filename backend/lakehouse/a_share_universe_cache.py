@@ -46,6 +46,13 @@ class AShareUniverseCacheStore:
             return None
         return [str(symbol) for symbol in row[0]]
 
+    def latest(self, *, provider: str) -> tuple[date, list[str]] | None:
+        self.ensure_schema()
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(f"SELECT as_of_date, symbols FROM {self.fqtn} WHERE provider = %s AND jsonb_array_length(symbols) > 0 ORDER BY as_of_date DESC, updated_at DESC LIMIT 1", (provider,))
+            row = cur.fetchone()
+        return (row[0], [str(symbol) for symbol in row[1]]) if row else None
+
     def put(self, *, provider: str, as_of_date: date, symbols: list[str]) -> None:
         self.ensure_schema()
         with self._connection() as conn, conn.cursor() as cur:

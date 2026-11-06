@@ -90,20 +90,56 @@ def list_a_share_symbols(
 ) -> dict[str, object]:
     """Return the current ordinary A-share universe for Airflow batch planning."""
 
-    from backend.providers.finance import BaoStockFinanceProvider
+    from backend.providers.tencent_securities import TencentSecurityProvider
 
     _require_internal_token(x_openfinance_token)
     options = {"adjustment_type": adjustment_type}
     if ignore_coverage:
         options["ignore_coverage"] = True
-    result = BaoStockFinanceProvider().list_a_share_symbols(**options)
+    provider = TencentSecurityProvider()
+    try:
+        result = provider.list_a_share_symbols(**options)
+    finally:
+        provider.close()
     return {
         "status": result.status,
         "provider": settings.FINANCE_DAILY_PROVIDER,
         "as_of_date": result.as_of_date.isoformat(),
         "symbols": result.symbols,
         "symbol_count": len(result.symbols),
+        "historical_universe_complete": False,
     }
+
+
+@router.get("/realtime-universe")
+def realtime_universe(x_openfinance_token: str | None = Header(default=None)) -> dict[str, object]:
+    """Refresh today's Tencent universe, retaining the last valid snapshot on failure."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from backend.lakehouse.a_share_universe_cache import AShareUniverseCacheStore
+    from backend.providers.tencent_securities import TencentSecurityProvider
+
+    _require_internal_token(x_openfinance_token)
+    today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+    cache = AShareUniverseCacheStore()
+    latest = cache.latest(provider="tencent")
+    if latest and latest[0] == today:
+        return {"symbols": latest[1], "as_of_date": latest[0].isoformat(), "stale": False}
+    provider = None
+    try:
+        provider = TencentSecurityProvider()
+        symbols = provider.fetch_a_share_symbols_for_day(day=today)
+        if not symbols:
+            raise ValueError("Tencent returned an empty universe")
+        cache.put(provider="tencent", as_of_date=today, symbols=symbols)
+        return {"symbols": symbols, "as_of_date": today.isoformat(), "stale": False}
+    except Exception as exc:
+        if latest:
+            return {"symbols": latest[1], "as_of_date": latest[0].isoformat(), "stale": True}
+        raise HTTPException(status_code=503, detail="Tencent security universe unavailable") from exc
+    finally:
+        if provider is not None:
+            provider.close()
 
 
 @router.post("/a-share-universe-coverage", status_code=status.HTTP_200_OK)

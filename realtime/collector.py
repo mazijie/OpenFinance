@@ -147,11 +147,14 @@ def main():
                 if index_thread is None or not index_thread.is_alive():
                     index_thread = Thread(target=collect_indices, args=(minute,), daemon=True)
                     index_thread.start()
-                with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
-                    row = conn.execute("SELECT symbols FROM openfinance.a_share_universe_cache WHERE jsonb_array_length(symbols)>0 ORDER BY as_of_date DESC, updated_at DESC LIMIT 1").fetchone()
-                if not row:
-                    raise RuntimeError("security universe cache is empty")
-                items = collect_round(row[0], minute)
+                response = requests.get(os.environ["UNIVERSE_URL"], headers={"X-Openfinance-Token": os.environ["OPENFINANCE_INTERNAL_API_TOKEN"]}, timeout=120)
+                response.raise_for_status()
+                universe = response.json()
+                if not universe.get("symbols"):
+                    raise RuntimeError("security universe is empty")
+                if universe.get("stale"):
+                    log.warning("using stale security universe from %s", universe.get("as_of_date"))
+                items = collect_round(universe["symbols"], minute)
             else:
                 symbols = [s.strip().upper() for s in os.getenv("QUOTE_SYMBOLS", "600519.SH,000001.SZ").split(",")]
                 def mock_fetch(batch, instant):

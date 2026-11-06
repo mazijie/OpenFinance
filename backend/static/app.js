@@ -15,7 +15,7 @@ const marketForm = document.querySelector("#marketForm");
 const symbolInput = document.querySelector("#symbolInput");
 const securitySearch = document.querySelector("#securitySearch");
 const securityResults = document.querySelector("#securityResults");
-const MARKET_ADJUSTMENT = "qfq";
+const MARKET_ADJUSTMENT = "none";
 const marketMessage = document.querySelector("#marketMessage");
 const stockLastPrice = document.querySelector("#stockLastPrice");
 const stockChangePercent = document.querySelector("#stockChangePercent");
@@ -729,6 +729,9 @@ async function loadHistoryPage(requestId, older) {
   loadOlderButton.hidden = true;
   const params = new URLSearchParams({ symbol: state.historySymbol, period: state.marketPeriod, adjustment_type: MARKET_ADJUSTMENT });
   if (older) params.set("before", state.historyBefore);
+  let timedOut = false;
+  const controller = state.marketAbortController;
+  const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 60000);
   try {
     let response = await fetch(`/api/market/history?${params.toString()}`, { signal: state.marketAbortController.signal });
     let payload = await response.json().catch(() => ({}));
@@ -764,13 +767,14 @@ async function loadHistoryPage(requestId, older) {
     loadOlderButton.textContent = "加载更早行情";
     setMarketMessage("");
   } catch (error) {
-    if (error.name === "AbortError" || requestId !== state.marketRequestId) return;
+    if ((error.name === "AbortError" && !timedOut) || requestId !== state.marketRequestId) return;
     state.historyFailed = true;
     historyStatus.textContent = "行情加载失败，请重试";
     loadOlderButton.hidden = false;
     loadOlderButton.textContent = "重试";
-    if (!older) { marketSourceBadge.textContent = "查询失败"; setMarketMessage(error.message || "行情查询失败，请稍后重试。", "error"); }
+    if (!older) { marketSourceBadge.textContent = "查询失败"; setMarketMessage(timedOut ? "行情查询超时，请稍后重试。" : (error.message || "行情查询失败，请稍后重试。"), "error"); }
   } finally {
+    clearTimeout(timeout);
     if (requestId === state.marketRequestId) { state.historyLoading = false; setLoading(false); }
   }
 }
@@ -1801,6 +1805,7 @@ function closeSecurityResults() {
 function showSecurityResults(query) {
   const text = query.trim().toLocaleLowerCase();
   const all = state.securities.map((item, index) => ({ item, index })).filter(({ item }) => `${item.symbol} ${item.name} ${item.exchange}`.toLocaleLowerCase().includes(text));
+  securityMatches = all;
   securityActive = 0;
   securityResults.innerHTML = all.map(({ item, index }, position) => `<div class="security-option" role="option" id="security-option-${position}" data-index="${index}" aria-selected="${position === 0}"><span>${escapeHtml(item.name)}</span><small>${escapeHtml(item.symbol)} · ${escapeHtml(item.exchange)}</small></div>`).join("") + (!all.length ? '<div class="security-results-note">未找到证券</div>' : "");
   securityResults.hidden = false;

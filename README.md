@@ -10,7 +10,7 @@ OpenFinance is an open-source research platform for China’s financial markets.
 - **News and annual reports:** Ingests and normalizes news and company reports; parses annual-report PDFs into searchable, page-linked evidence.
 - **Evidence-based research:** Provides a browser UI and LangGraph research agent with persistent sessions, streaming answers, approval and resume flows, and citations from market, news, and report sources. Hybrid retrieval uses PostgreSQL with pgvector and OpenSearch.
 - **Data processing:** Stores raw data in MinIO Bronze, curated tables in Iceberg Silver, and calculated daily indicators in Gold. Airflow schedules ingestion and processing; Spark builds and maintains analytical tables.
-- **Optional monitoring and live quotes:** Retains investment-monitoring APIs and reports, while scheduled monitoring is disabled by default. An optional Kafka and Flink pipeline collects market snapshots; its windows are sampled statistics, not tick-by-tick trades.
+- **Monitoring and live quotes:** Retains investment-monitoring APIs and reports, while scheduled monitoring is disabled by default. A Kafka and Flink pipeline collects market snapshots; its windows are sampled statistics, not tick-by-tick trades.
 
 The research agent can search approved public websites when internal sources do not provide evidence. Web access is restricted to HTTPS and configured allowlisted domains. Market-data APIs read the local lakehouse and do not contact providers at query time.
 
@@ -39,21 +39,7 @@ docker compose up -d --build
 docker compose ps
 ```
 
-The default stack includes the backend, PostgreSQL, MinIO, OpenSearch, local Ollama embeddings, workers, and Spark. The backend runs `alembic upgrade head` before starting the API. Ollama downloads the configured embedding model during initialization, so the first startup may take a while and use significant disk space.
-
-### Optional services
-
-Start Airflow to manage ingestion and processing DAGs:
-
-```bash
-docker compose --profile airflow up -d --build airflow-init airflow-webserver airflow-scheduler
-```
-
-Start the real-time quote learning pipeline with Kafka and Flink:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.realtime.yml --profile realtime up -d --build
-```
+The default stack includes the backend, PostgreSQL, MinIO, OpenSearch, local Ollama embeddings, workers, Spark, Airflow, and the real-time quote pipeline. The backend runs `alembic upgrade head` before starting the API. Ollama downloads the configured embedding model during initialization, so the first startup may take a while and use significant disk space.
 
 Detailed pipeline behavior, configuration, and operational limits are documented in the [finance pipeline guide](docs/finance-pipeline-guide.md), [Spark guide](spark/README.md), [investment monitoring guide](docs/investment-monitor.md), and [real-time quotes guide](docs/realtime-quotes.md).
 
@@ -63,12 +49,12 @@ Detailed pipeline behavior, configuration, and operational limits are documented
 | --- | --- |
 | Research UI | <http://localhost:8000/ui> |
 | API and OpenAPI docs | <http://localhost:8000/docs> |
-| Airflow (with the `airflow` profile) | <http://localhost:8080> |
+| Airflow | <http://localhost:8080> |
 | Spark Master UI | <http://localhost:8081> |
 | Spark Worker UI | <http://localhost:8082> |
 | Spark History Server | <http://localhost:18080> |
 | MinIO Console | <http://localhost:9001> |
-| Flink UI (with the `realtime` profile) | <http://localhost:8083> |
+| Flink UI | <http://localhost:8083> |
 
 The Compose files are intended as a local, single-host reference deployment. They do not provide high availability or production security defaults. Replace sample credentials, restrict network access to development services, and arrange backups for persistent data before using the stack with important datasets. Configure a reachable Ray cluster and its storage endpoints for annual-report parsing at scale; see `.env.example` and the pipeline guide.
 

@@ -63,16 +63,15 @@ class Settings(BaseSettings):
     ICEBERG_GOLD_METRICS_TABLE: str = "gold_security_daily_metrics"
     ICEBERG_S3_PATH_STYLE_ACCESS: bool = True
 
-    FINANCE_DEFAULT_PROVIDER: str = "baostock"
     # Daily history is independent of BaoStock security metadata and calendars.
-    FINANCE_DAILY_PROVIDER: Literal["tencent", "baostock"] = "tencent"
+    FINANCE_DAILY_PROVIDER: Literal["tencent"] = "tencent"
     TENCENT_CONNECT_TIMEOUT_SECONDS: float = Field(default=5.0, gt=0)
     TENCENT_READ_TIMEOUT_SECONDS: float = Field(default=15.0, gt=0)
     TENCENT_MAX_RETRIES: int = Field(default=2, ge=0, le=2)
     TENCENT_RETRY_BACKOFF_SECONDS: float = Field(default=2.0, ge=0)
     # Zero means no configured quota, not an assertion about upstream limits.
     TENCENT_DAILY_REQUEST_LIMIT: int = Field(default=0, ge=0)
-    FINANCE_DEFAULT_ADJUSTMENT_TYPE: str = "qfq"
+    FINANCE_DEFAULT_ADJUSTMENT_TYPE: Literal["none"] = "none"
     FINANCE_DEFAULT_LOOKBACK_DAYS: int = 30
     BAOSTOCK_SOCKET_TIMEOUT_SECONDS: float = 15.0
     BAOSTOCK_SYMBOL_TIMEOUT_SECONDS: int = 45
@@ -90,7 +89,6 @@ class Settings(BaseSettings):
     A_SHARE_BACKFILL_START_DATE: str = "1990-01-01"
     A_SHARE_BATCH_SIZE: int = 100
     A_SHARE_MAX_ACTIVE_BATCHES: int = 4
-    A_SHARE_UNIVERSE_LOOKBACK_DAYS: int = 30
     ICEBERG_WRITE_MAX_RETRIES: int = 10
     ICEBERG_WRITE_INITIAL_BACKOFF_SECONDS: float = 1.0
     ICEBERG_WRITE_MAX_BACKOFF_SECONDS: float = 30.0

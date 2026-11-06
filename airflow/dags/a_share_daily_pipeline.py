@@ -30,7 +30,7 @@ from a_share_pipeline_helpers import _submit_a_share_ingestion, _submit_finance_
 def a_share_daily_pipeline():
     @task
     def build_window() -> dict[str, object]:
-        adjustment_type = os.getenv("A_SHARE_DAILY_ADJUSTMENT_TYPE", "qfq").strip().lower()
+        adjustment_type = "none"
         plan = _post_internal_job(
             "/internal/jobs/a-share-missing-bars-plan",
             {

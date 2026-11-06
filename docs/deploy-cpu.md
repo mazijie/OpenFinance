@@ -2,7 +2,7 @@
 
 在项目根目录运行。保留现有 `.env`，不要用示例文件覆盖。
 
-要求 Docker Compose v2.24.0 或更新版本；CPU 覆盖文件通过 `!reset` 移除 Ollama 的 GPU 请求，模型仍为 bge-m3，向量维度仍为 1024。
+要求 Docker Compose v2.24.0 或更新版本；CPU 覆盖文件通过 `!reset` 移除 Ollama 的 GPU 请求，模型仍为 bge-m3，向量维度仍为 1024。启动前在 `.env` 设置有效的 `AIRFLOW__CORE__FERNET_KEY`、`AIRFLOW__WEBSERVER__SECRET_KEY` 和管理员密码，并检查数据源凭据。
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.cpu.yml config --quiet
@@ -12,13 +12,7 @@ docker compose -f docker-compose.yml -f docker-compose.cpu.yml ps -a
 
 网页位于 `http://服务器IP:8000/ui`，API 文档位于 `/docs`。首次启动需要下载镜像和 embedding 模型；backend 会等待模型下载及数据库初始化完成。
 
-启用数据调度前，在 `.env` 设置有效的 `AIRFLOW__CORE__FERNET_KEY`、`AIRFLOW__WEBSERVER__SECRET_KEY` 和管理员密码，并检查数据源凭据：
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.cpu.yml --profile airflow up -d --build airflow-init airflow-webserver airflow-scheduler
-```
-
-Airflow 位于 `http://服务器IP:8080`，查看 DAG 状态并按需启用采集任务。大规模历史回填应单独安排。
+Airflow 和实时行情链路随默认服务一起启动。Airflow 位于 `http://服务器IP:8080`，查看 DAG 状态并按需启用采集任务。大规模历史回填应单独安排。
 
 所有后续 Compose 操作均应带上两个 `-f` 参数，避免重新引入默认的 GPU 请求。例如：
 

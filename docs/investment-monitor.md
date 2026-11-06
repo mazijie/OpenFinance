@@ -41,7 +41,7 @@ GET            /api/monitor/reports/{report_id}
 构建并启动完整环境：
 
 ```bash
-docker compose --profile airflow --profile spark up -d --build
+docker compose up -d --build
 ```
 
 ### Shadow mode

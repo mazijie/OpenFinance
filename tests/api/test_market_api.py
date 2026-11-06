@@ -30,7 +30,7 @@ def _summary() -> MarketSummary:
         exchange="SH",
         start_date=date(2026, 7, 1),
         end_date=date(2026, 7, 31),
-        adjustment_type="qfq",
+        adjustment_type="none",
         first_close=1200,
         last_close=1250,
         interval_return=0.0416,
@@ -42,10 +42,10 @@ def _summary() -> MarketSummary:
                 "low": 1230,
                 "close": 1250,
                 "volume": 1000,
-                "provider": "baostock",
+                "provider": "tencent",
                 "available_at": now.isoformat(),
                 "ingested_at": now.isoformat(),
-                "raw_object_path": "finance/provider=baostock/market.json",
+                "raw_object_path": "finance/provider=tencent/market.json",
             }
         ],
     )
@@ -63,7 +63,7 @@ def test_market_api_forwards_query_and_returns_summary() -> None:
                 "symbol": "600519.sh",
                 "start_date": "2026-07-01",
                 "end_date": "2026-07-31",
-                "adjustment_type": "qfq",
+                "adjustment_type": "none",
             },
         )
     finally:

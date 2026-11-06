@@ -282,18 +282,19 @@ class FinanceWriter:
 
         rows = (
             self.security_master_table.scan()
-            .select("symbol", "name", "exchange")
+            .select("symbol", "name", "exchange", "provider", "ingested_at")
             .to_arrow()
             .to_pylist()
         )
-        return [
-            {
-                "symbol": str(row["symbol"]).upper(),
-                "name": str(row["name"]),
-                "exchange": str(row["exchange"]).upper(),
-            }
-            for row in rows
-        ]
+        selected = {}
+        for row in rows:
+            exchange = str(row["exchange"]).upper()
+            symbol = str(row["symbol"]).upper().split(".")[0]
+            key = (symbol, exchange)
+            rank = (row.get("provider") == "tencent", str(row.get("ingested_at") or ""), str(row.get("name") or ""))
+            if key not in selected or rank > selected[key][0]:
+                selected[key] = (rank, {"symbol": symbol, "name": str(row["name"]), "exchange": exchange})
+        return [item for _, item in selected.values()]
 
     def scan_trading_calendar(self) -> list[TradingCalendarRecord]:
         return [TradingCalendarRecord.model_validate(row) for row in self._scan_arrow_table(self.trading_calendar_table).to_pylist()]

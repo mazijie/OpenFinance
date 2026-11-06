@@ -1,4 +1,4 @@
-"""Independent daily-bar providers; metadata continues to come from BaoStock."""
+"""Tencent unadjusted daily-bar provider."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import httpx
 
 from backend.config import settings
 from backend.logging_utils import get_logger
-from backend.providers.finance import BaseFinanceProvider, BaoStockFinanceProvider, FinanceProviderError
+from backend.providers.finance import BaseFinanceProvider, FinanceProviderError
 from backend.schemas.finance import DailyBarRecord
 
 logger = get_logger(__name__)
@@ -37,14 +37,10 @@ def daily_windows(start: date, end: date):
 def daily_request_limit(provider: str) -> int:
     if provider == "tencent":
         return settings.TENCENT_DAILY_REQUEST_LIMIT
-    if provider == "baostock":
-        return settings.BAOSTOCK_DAILY_REQUEST_LIMIT
     raise ValueError(f"Unsupported daily provider: {provider}")
 
 
 def estimate_daily_requests(provider: str, start: date, end: date) -> int:
-    if provider == "baostock":
-        return 2
     if provider == "tencent":
         return sum(1 for _ in daily_windows(start, end))
     raise ValueError(f"Unsupported daily provider: {provider}")
@@ -54,8 +50,6 @@ def create_daily_provider(name: str | None = None, *, budget_store=None, check_l
     name = name or settings.FINANCE_DAILY_PROVIDER
     if name == "tencent":
         return TencentDailyBarsProvider(budget_store=budget_store, check_lease=check_lease)
-    if name == "baostock":
-        return BaoStockFinanceProvider(budget_store=budget_store)
     raise ValueError(f"Unsupported daily provider: {name}")
 
 
@@ -102,14 +96,13 @@ class TencentDailyBarsProvider(BaseFinanceProvider):
         return f"{code}.{exchange}", exchange.lower() + code
 
     def fetch_daily_bars(self, *, symbols: list[str], start_date, end_date,
-                         adjustment_type="qfq", limit=MAX_BARS) -> list[DailyBarRecord]:
-        adjustment_type = {"forward": "qfq", "backward": "hfq"}.get(adjustment_type, adjustment_type)
-        if adjustment_type not in {"none", "qfq", "hfq"}:
+                         adjustment_type="none", limit=MAX_BARS) -> list[DailyBarRecord]:
+        if adjustment_type != "none":
             raise FinanceProviderError(f"Unsupported adjustment_type: {adjustment_type}")
         if not 1 <= limit <= MAX_BARS:
             raise ValueError("limit must be between 1 and 640")
-        start = BaoStockFinanceProvider._coerce_date(start_date)
-        end = BaoStockFinanceProvider._coerce_date(end_date)
+        start = start_date.date() if isinstance(start_date, datetime) else date.fromisoformat(start_date) if isinstance(start_date, str) else start_date
+        end = end_date.date() if isinstance(end_date, datetime) else date.fromisoformat(end_date) if isinstance(end_date, str) else end_date
         windows = list(daily_windows(start, end))
         found = {}
         for symbol in dict.fromkeys(symbols):

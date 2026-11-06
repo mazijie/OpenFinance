@@ -43,7 +43,7 @@ python -m backend.ingestion.jobs.benchmark_tencent_daily
 以下命令仅供后续服务器部署使用，本次没有执行：
 
 ```powershell
-docker compose --profile airflow -f docker-compose.yml -f docker-compose.server.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.server.yml up -d
 ```
 
 通过 `A_SHARE_INGEST_WORKERS` 和 `A_SHARE_MAX_ACTIVE_BATCHES` 调整 Worker 和批次数。HTTP 超时、重试及可选配额使用 `.env.example` 中的 `TENCENT_*` 配置。新建表包含可空字段；本次没有对已有表执行迁移，也没有实现旧数据拼接或迁移标记。服务器的全市场采集和历史补数需要后续单独执行。

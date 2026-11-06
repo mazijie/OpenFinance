@@ -47,12 +47,18 @@
 - 使用 PostgreSQL 持久化监护清单、监测运行、报告和执行轨迹
 - 提供 Gold 指标调度；历史监测调度默认关闭
 
+历史回填遇到部分股票采集失败时，采集任务会在日志中立即列出失败代码，保留成功批次的 Bronze 数据，并按股票单独重试。重试轮数由 `A_SHARE_FAILED_SYMBOL_RETRIES` 控制，默认 2；重试得到的数据与原始批次一起标准化。重试后仍失败的股票会在质量检查中列出，此时不会记录全市场覆盖，但已写入的数据保留。旧运行的结果快照不会随代码更新自动改变，恢复旧运行前需核对失败股票和数据源错误，不要直接把质量检查标记为成功。
+
+A 股股票名单、证券信息和日线使用腾讯接口，日线固定为不复权（`none`）；交易日历暂时使用 BaoStock。回填以腾讯返回的股票名单为范围，质量检查保留成功结果并列出重试后失败或无数据的股票。任务会重新获取股票名单；历史退市证券如未出现在腾讯返回的名单中，需要另行补充。
+
+旧版前复权数据不会因修改代码自动删除或变成不复权数据。切换线上运行前，必须先停止旧采集和归一化任务、备份并核对 Bronze、Silver 和 Gold 中的旧行情以及任务状态，再清理指定范围并重新回填；应保留新闻、年报和交易日历。不要直接将旧前复权数据改标签或重放旧 Bronze。
+
 年报 Silver 回放使用 `openfinance_annual_report_bronze_replay` DAG。它只扫描已有 Bronze
 manifest，复用已有 Derived IR，然后写入当前 Silver 并重建 Gold，不会调用 CNInfo 或重复下载 PDF。
 例如只回放贵州茅台 2024 年报：
 
 ```bash
-docker compose --profile airflow up -d airflow-init airflow-scheduler airflow-webserver
+docker compose up -d airflow-init airflow-scheduler airflow-webserver
 docker exec openfinance-airflow-scheduler airflow dags trigger \
   openfinance_annual_report_bronze_replay \
   --conf '{"years":[2024],"stocks":["600519.SH"]}'

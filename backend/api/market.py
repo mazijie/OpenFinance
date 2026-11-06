@@ -36,7 +36,7 @@ def market_history(
     symbol: str = Query(min_length=1, max_length=16),
     period: Literal["daily", "weekly", "monthly"] = "daily",
     before: date | None = None,
-    adjustment_type: AdjustmentType = "qfq",
+    adjustment_type: AdjustmentType = "none",
     finance_service: FinanceService = Depends(get_finance_service),
 ):
     if "as_of" in request.query_params:
@@ -71,7 +71,7 @@ def get_market(
     security_id: str | None = Query(default=None, min_length=1, max_length=64),
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
-    adjustment_type: AdjustmentType = Query(default="qfq"),
+    adjustment_type: AdjustmentType = Query(default="none"),
     finance_service: FinanceService = Depends(get_finance_service),
 ) -> MarketSearchResult:
     """Query Silver/Gold market data without contacting an external provider."""

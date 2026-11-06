@@ -17,6 +17,7 @@ from backend.ingestion.writers.bronze_writer import BronzeWriter
 from backend.logging_utils import configure_logging, get_logger
 from backend.providers.finance import BaseFinanceProvider, BaoStockFinanceProvider, FinanceProviderError
 from backend.providers.daily_bars import TencentDailyBarsProvider, create_daily_provider
+from backend.providers.tencent_securities import TencentSecurityProvider
 from backend.lakehouse.job_lease import JobLeaseLost
 
 logger = get_logger(__name__)
@@ -44,7 +45,7 @@ def ingest_a_share_daily_bars(
     symbols: list[str],
     start_date: date,
     end_date: date,
-    adjustment_type: str = "qfq",
+    adjustment_type: str = "none",
     idempotency_key: str | None = None,
     include_security_master: bool = True,
     include_trading_calendar: bool = True,
@@ -54,13 +55,15 @@ def ingest_a_share_daily_bars(
     writer: BronzeWriter | None = None,
     check_lease: Callable[[], None] | None = None,
 ) -> IngestAshareDailyBarsResult:
-    """Collect daily bars independently of BaoStock metadata and calendar sessions."""
+    """Collect Tencent daily bars and metadata with BaoStock calendars."""
 
     normalized_symbols = list(dict.fromkeys(symbol.strip().upper() for symbol in symbols if symbol.strip()))
     if not normalized_symbols:
         raise ValueError("symbols cannot be empty")
     if start_date > end_date:
         raise ValueError("start_date must not be after end_date")
+    if adjustment_type != "none":
+        raise ValueError("Only unadjusted daily bars are supported")
     with ExitStack() as resources:
         daily = provider or create_daily_provider(daily_provider_name, check_lease=check_lease)
         if provider is None and hasattr(daily, "close"):
@@ -68,7 +71,10 @@ def ingest_a_share_daily_bars(
         provider_name = getattr(daily, "name", daily_provider_name or settings.FINANCE_DAILY_PROVIDER)
         metadata = metadata_provider
         if (include_security_master or include_trading_calendar) and metadata is None:
-            metadata = daily if not getattr(daily, "daily_only", False) else BaoStockFinanceProvider()
+            metadata = daily if not getattr(daily, "daily_only", False) else TencentSecurityProvider()
+            if hasattr(metadata, "close") and metadata is not daily:
+                resources.callback(metadata.close)
+        calendar_provider = (BaoStockFinanceProvider() if include_trading_calendar and isinstance(metadata, TencentSecurityProvider) else metadata)
         resolved_writer = writer or BronzeWriter()
         security_master, daily_bars = [], []
         processed_symbols = 0
@@ -84,7 +90,12 @@ def ingest_a_share_daily_bars(
                         check_lease()
                     timeout = 0 if getattr(daily, "handles_retries", False) else settings.BAOSTOCK_SYMBOL_TIMEOUT_SECONDS
                     with _symbol_timeout(timeout):
-                        master = metadata.fetch_security_master(symbols=[symbol]) if include_security_master else []
+                        if include_security_master:
+                            master = (_fetch_security_master_with_retry(metadata, symbol, check_lease)
+                                      if getattr(daily, "handles_retries", False)
+                                      else metadata.fetch_security_master(symbols=[symbol]))
+                        else:
+                            master = []
                         bars = daily.fetch_daily_bars(symbols=[symbol], start_date=start_date,
                                                      end_date=end_date, adjustment_type=adjustment_type)
                     security_master.extend(master)
@@ -117,7 +128,7 @@ def ingest_a_share_daily_bars(
             for exchange in exchanges:
                 if check_lease:
                     check_lease()
-                trading_calendar.extend(metadata.fetch_trading_calendar(exchange=exchange, start_date=start_date, end_date=end_date))
+                trading_calendar.extend(calendar_provider.fetch_trading_calendar(exchange=exchange, start_date=start_date, end_date=end_date))
         raw_response = {
             "security_master": [record.model_dump(mode="json") for record in security_master],
             "trading_calendar": [record.model_dump(mode="json") for record in trading_calendar],
@@ -141,7 +152,26 @@ def ingest_a_share_daily_bars(
         )
         logger.info("A-share daily bars ingestion completed", event="ingest_a_share_daily_bars_completed",
                     extra_fields=result.to_dict())
-        return result
+    return result
+
+
+def _fetch_security_master_with_retry(provider: BaseFinanceProvider, symbol: str,
+                                      check_lease: Callable[[], None] | None) -> list:
+    """Retry metadata independently of the daily provider's retry policy."""
+    for attempt in range(settings.TENCENT_MAX_RETRIES + 1):
+        if check_lease:
+            check_lease()
+        try:
+            return provider.fetch_security_master(symbols=[symbol])
+        except JobLeaseLost:
+            raise
+        except Exception:
+            if attempt >= settings.TENCENT_MAX_RETRIES:
+                raise
+            logger.warning("A-share security metadata request failed; retrying",
+                           extra_fields={"symbol": symbol, "attempt": attempt + 1})
+            time_module.sleep(settings.TENCENT_RETRY_BACKOFF_SECONDS * (attempt + 1))
+    raise RuntimeError("Unreachable metadata retry state")
 
 
 @contextmanager
@@ -174,7 +204,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--symbols", nargs="+", required=True, help="One or many A-share symbols, e.g. 600519.SH")
     parser.add_argument("--start-date", help="Start date in YYYY-MM-DD format")
     parser.add_argument("--end-date", help="End date in YYYY-MM-DD format")
-    parser.add_argument("--daily-provider", choices=("tencent", "baostock"), default=settings.FINANCE_DAILY_PROVIDER)
+    parser.add_argument("--daily-provider", choices=("tencent",), default=settings.FINANCE_DAILY_PROVIDER)
     parser.add_argument("--adjustment-type", default=settings.FINANCE_DEFAULT_ADJUSTMENT_TYPE)
     parser.add_argument(
         "--use-default-window",

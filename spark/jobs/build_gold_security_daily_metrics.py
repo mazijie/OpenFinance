@@ -231,7 +231,7 @@ def run(
             start_date=source_start.isoformat(),
             end_date=end_date.isoformat() if end_date else None,
         )
-        metrics = calculate_metrics(daily_bars)
+        metrics = calculate_metrics(daily_bars.filter(F.col("adjustment_type") == "none"))
         gold = build_gold_frame(metrics, start_date=start_date, end_date=end_date)
         validation = validate_gold_frame(gold)
         parts = target_table.split(".")
