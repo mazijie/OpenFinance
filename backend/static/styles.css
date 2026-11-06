@@ -26,6 +26,7 @@ button { cursor: pointer; }
 .brand, .topbar-status, .section-heading, .chart-heading, .table-heading, .news-time, .news-tags, .pager { display: flex; align-items: center; }
 .brand { gap: 12px; }
 .brand-mark { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 12px; background: #123e46; color: #b7f2e6; font-size: 14px; font-weight: 800; letter-spacing: .06em; }
+.brand-description { margin: 3px 0 0; color: var(--muted); font-size: 11px; line-height: 1.2; }
 .eyebrow { margin: 0; color: #768397; font-size: 10px; font-weight: 800; letter-spacing: .13em; }
 .topbar h1, .section-heading h2 { margin: 3px 0 0; color: var(--ink); font-size: 21px; line-height: 1.2; }
 .topbar-status { gap: 7px; color: var(--muted); font-size: 12px; }
@@ -253,9 +254,7 @@ details { margin-top: 8px; }.bubble summary { cursor: pointer; color: var(--teal
 .report-card h3 { margin: 0 0 5px; color: var(--ink); font-size: 13px; line-height: 1.45; }
 .report-meta { display: flex; flex-wrap: wrap; gap: 5px 12px; color: var(--muted); font-size: 10px; }
 .report-actions { display: flex; gap: 7px; margin-top: 8px; }
-.report-actions a, .report-actions button { display: inline-flex; min-height: 28px; align-items: center; border: 1px solid #d4dde7; border-radius: 6px; background: #fff; color: #526071; padding: 0 9px; font-size: 10px; text-decoration: none; }
-.report-actions .muted-text { display: inline-flex; min-height: 28px; align-items: center; color: var(--muted); font-size: 10px; }
-.report-page-text { max-height: 150px; margin-top: 8px; overflow: auto; border-radius: 6px; background: #f7f9fb; color: #526071; padding: 9px; font-size: 11px; line-height: 1.55; white-space: pre-wrap; }
+.report-actions a { display: inline-flex; min-height: 28px; align-items: center; border: 1px solid #d4dde7; border-radius: 6px; background: #fff; color: #526071; padding: 0 9px; font-size: 10px; text-decoration: none; }
 .pager { flex-shrink: 0; }
 
 @media (max-width: 1050px) { .topbar { padding-inline: 16px; }.topbar-right { gap: 12px; }.topbar-status { display: none; } #marketPage { grid-template-columns: minmax(0, 1.3fr) minmax(290px, .9fr); }.market-panel { padding: 13px; }.market-query { grid-template-columns: repeat(3, minmax(0, 1fr)); }.field-symbol, .field-asof { grid-column: span 1; }.market-query .primary-button { grid-column: span 3; } }

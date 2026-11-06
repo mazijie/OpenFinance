@@ -59,7 +59,7 @@ def test_frontend_page_and_assets() -> None:
     script_response = client.get("/static/app.js")
 
     assert page_response.status_code == 200
-    assert "OpenFinance Agent" in page_response.text
+    assert "<title>OpenFinance</title>" in page_response.text
     assert "/api/chat" in script_response.text
     assert "/api/news" in script_response.text
     assert "/api/market" in script_response.text
@@ -72,7 +72,8 @@ def test_frontend_page_and_assets() -> None:
     assert 'data-page="monitorPage"' not in page_response.text
     assert 'data-action="open-monitor-dashboard"' not in script_response.text
     assert 'id="marketPage"' in page_response.text
-    assert "行情、智能问答" in page_response.text
+    assert "行情与问答" in page_response.text
+    assert "新闻与年报" in page_response.text
     assert 'id="modelSettingsForm"' in page_response.text
     assert 'id="chatThreadTabs"' in page_response.text
     assert 'id="newChatThreadButton"' in page_response.text

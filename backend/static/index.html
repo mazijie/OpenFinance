@@ -3,32 +3,32 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="OpenFinance Agent A 股行情与新闻研究工作台" />
-    <title>OpenFinance Agent · 金融研究工作台</title>
-    <link rel="stylesheet" href="/static/styles.css?v=forward-quote-1" />
+    <meta name="description" content="查看 A 股行情、财经新闻和公司年报" />
+    <title>OpenFinance</title>
+    <link rel="stylesheet" href="/static/styles.css?v=copy-refresh-1" />
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js" defer></script>
-    <script src="/static/app.js?v=market-universe-2" defer></script>
+    <script src="/static/app.js?v=copy-refresh-1" defer></script>
   </head>
   <body>
     <header class="topbar">
       <div class="brand">
         <span class="brand-mark">OF</span>
         <div>
-          <p class="eyebrow">OPENFINANCE AGENT</p>
-          <h1>金融研究工作台</h1>
+          <h1>OpenFinance</h1>
+          <p class="brand-description">A 股行情与财经资讯</p>
         </div>
       </div>
       <div class="topbar-right">
         <nav class="page-nav" aria-label="主导航">
-          <button class="nav-button active" type="button" data-page="marketPage" aria-current="page">行情、智能问答</button>
-          <button class="nav-button" type="button" data-page="researchPage">新闻和财报</button>
+          <button class="nav-button active" type="button" data-page="marketPage" aria-current="page">行情与问答</button>
+          <button class="nav-button" type="button" data-page="researchPage">新闻与年报</button>
         </nav>
         <div class="topbar-status"><span class="status-light"></span><span id="systemStatus">数据服务就绪</span></div>
       </div>
     </header>
 
     <main class="workspace">
-      <section class="page-view active" id="marketPage" aria-label="行情与智能问答">
+      <section class="page-view active" id="marketPage" aria-label="行情与问答">
       <section class="market-panel panel" aria-label="A 股行情">
         <section class="market-overview-card" aria-label="市场概览">
           <div id="realtimeIndices" class="index-grid" aria-label="主要指数"></div>
@@ -60,7 +60,7 @@
 
       </section>
 
-        <section class="chat-panel panel" aria-label="Agent chat">
+        <section class="chat-panel panel" aria-label="智能问答">
           <div class="section-heading">
             <div><p class="eyebrow">RESEARCH AGENT</p><h2>智能问答</h2></div>
             <div class="heading-actions"><span class="status-pill" id="chatStatus">就绪</span><button class="icon-button" type="button" id="newChatThreadButton" title="新建对话">＋</button></div>
@@ -69,7 +69,7 @@
             <div class="chat-thread-tabs" id="chatThreadTabs" role="tablist" aria-label="聊天记录"></div>
           </div>
           <details class="chat-model-config" id="modelSettingsDetails">
-            <summary><span>模型设置 · DeepSeek</span><span class="model-settings-status" id="modelSettingsStatus">未配置 Key</span></summary>
+            <summary><span>模型设置 · DeepSeek</span><span class="model-settings-status" id="modelSettingsStatus">未设置 API Key</span></summary>
             <form id="modelSettingsForm" autocomplete="off">
               <label class="field">API Key
                 <input id="llmApiKey" name="llm_api_key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-..." />
@@ -82,26 +82,26 @@
               </label>
               <div class="chat-model-actions">
                 <button class="primary-button" type="submit">保存到本次会话</button>
-                <button class="secondary-button" type="button" id="clearLlmKeyButton">清除</button>
+                <button class="secondary-button" type="button" id="clearLlmKeyButton">清除 API Key</button>
               </div>
-              <small>Key 仅保存到当前标签页，不写入系统配置和对话记录。</small>
+              <small>API Key 仅保存到当前标签页，不写入系统配置和对话记录。</small>
             </form>
           </details>
-          <div class="messages" id="messages" aria-live="polite"><article class="message assistant"><div class="bubble">你好！我可以查询股票行情，并结合新闻和财报回答问题。试试问我：<br />“查询贵州茅台最近一个月的行情”</div></article></div>
+          <div class="messages" id="messages" aria-live="polite"><article class="message assistant"><div class="bubble">你好！你可以问我股票行情、财经新闻和公司年报相关的问题。例如：贵州茅台最近一个月的行情如何？</div></article></div>
           <form class="chat-form" id="chatForm"><textarea id="questionInput" name="question" rows="3" placeholder="例如：600519.SH 最近一个月涨跌如何？" required></textarea><button class="primary-button" type="submit" id="sendButton">发送</button></form>
         </section>
 
       </section>
 
-      <section class="page-view research-page" id="researchPage" aria-label="新闻和财报" hidden>
+      <section class="page-view research-page" id="researchPage" aria-label="新闻与年报" hidden>
         <section class="news-panel panel" aria-label="财经新闻">
-          <div class="section-heading"><div><p class="eyebrow">MARKET NEWS</p><h2>最新财经新闻</h2></div><button class="icon-button" type="button" id="refreshNewsButton" title="刷新新闻">↻</button></div>
+          <div class="section-heading"><div><p class="eyebrow">MARKET NEWS</p><h2>财经新闻</h2></div><button class="icon-button" type="button" id="refreshNewsButton" title="刷新新闻">↻</button></div>
           <div class="news-meta"><span id="newsSummary">加载中…</span><label>每页<select id="pageSizeSelect"><option value="10">10</option><option value="20" selected>20</option><option value="50">50</option></select></label></div>
           <div class="news-list" id="newsList"></div>
           <footer class="pager"><button class="secondary-button" type="button" id="prevPageButton">上一页</button><span id="pageInfo">第 1 页</span><button class="secondary-button" type="button" id="nextPageButton">下一页</button></footer>
         </section>
-        <section class="reports-panel panel" aria-label="上市公司年报">
-          <div class="section-heading"><div><p class="eyebrow">ANNUAL REPORTS</p><h2>上市公司年报</h2></div><button class="icon-button" type="button" id="refreshReportsButton" title="刷新财报">↻</button></div>
+        <section class="reports-panel panel" aria-label="公司年报">
+          <div class="section-heading"><div><p class="eyebrow">ANNUAL REPORTS</p><h2>公司年报</h2></div><button class="icon-button" type="button" id="refreshReportsButton" title="刷新年报">↻</button></div>
           <form class="report-filters" id="reportFilterForm">
             <label class="field">证券代码<input id="reportStockCode" name="stock_code" maxlength="16" placeholder="全部证券" /></label>
             <label class="field">报告年度<select id="reportYear" name="report_year"><option value="">全部年度</option></select></label>

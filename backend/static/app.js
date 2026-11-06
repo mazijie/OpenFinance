@@ -215,7 +215,7 @@ function requireLlmConfig() {
   if (!config.apiKey) {
     if (modelSettingsDetails) modelSettingsDetails.open = true;
     window.setTimeout(() => llmApiKeyInput.focus(), 0);
-    throw new Error("请先在左侧填写 DeepSeek API Key。");
+    throw new Error("请先在模型设置中填写 DeepSeek API Key。");
   }
   return config;
 }
@@ -232,7 +232,7 @@ function llmHeaders(extra = {}) {
 function renderLlmSettingsStatus() {
   const config = getLlmConfig();
   const ready = Boolean(config.apiKey);
-  modelSettingsStatus.textContent = ready ? `已配置 · ${config.model}` : "未配置 Key";
+  modelSettingsStatus.textContent = ready ? `已配置 · ${config.model}` : "未设置 API Key";
   modelSettingsStatus.classList.toggle("ready", ready);
 }
 
@@ -926,7 +926,7 @@ function buildHistoricalProgress(events) {
 function renderChatHistory(history, events = []) {
   messages.innerHTML = "";
   if (!history.length) {
-    messages.innerHTML = '<div class="empty-state">这个对话还没有消息，直接提问即可。</div>';
+    addMessage("assistant", "你好！你可以问我股票行情、财经新闻和公司年报相关的问题。例如：贵州茅台最近一个月的行情如何？");
     return;
   }
   const eventsByTurn = new Map();
@@ -1131,7 +1131,7 @@ function resetChatProgress() {
   chatProgressTitle = title;
   chatProgressList = list;
   chatElapsed = elapsed;
-  chatProgressTitle.textContent = "正在建立研究任务";
+  chatProgressTitle.textContent = "正在准备回答";
   startChatProgressTimer();
 }
 
@@ -1255,9 +1255,9 @@ async function sendQuestion(question) {
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload.detail || `请求失败（${response.status}）`);
     }
-    const connectedItem = appendChatProgress("研究任务已建立", "开始规划需要调用的数据和工具");
+    const connectedItem = appendChatProgress("已准备回答", "正在确定需要的资料");
     finishChatProgressItem(connectedItem);
-    setChatProgressTitle("模型正在规划研究步骤");
+    setChatProgressTitle("正在查找相关资料");
     maybeRenameActiveChatThread(question);
 
     await parseSSEStream(response, (event) => {
@@ -1312,7 +1312,7 @@ async function sendQuestion(question) {
           answerBubble.className = "bubble";
           article.appendChild(answerBubble);
           messages.appendChild(article);
-          generatingItem = appendChatProgress("生成研究结论", "基于已取得的证据组织回答");
+          generatingItem = appendChatProgress("正在整理回答", "根据已取得的资料组织回答");
         }
         setChatProgressTitle("正在生成回答");
         answerText += payload.text || "";
@@ -1328,7 +1328,7 @@ async function sendQuestion(question) {
         setChatProgressTitle("分析完成");
       } else if (type === "turn.failed") {
         terminalEvent = "failed";
-        streamError = payload.error || "Agent 运行失败";
+        streamError = payload.error || "回答失败，请重试";
         appendChatProgress("运行失败", streamError, "error");
         setChatProgressTitle("分析失败");
       } else if (type === "turn.cancelled") {
@@ -1354,7 +1354,7 @@ async function sendQuestion(question) {
         appendChatCitations(answerBubble, citations);
       }
     }
-    if (!answerText) addMessage("assistant", "Agent 未生成回答。");
+    if (!answerText) addMessage("assistant", "暂时无法生成回答，请重试。");
     const totalTime = formatChatElapsed();
     stopChatProgressTimer();
     if (chatElapsed) chatElapsed.textContent = totalTime;
@@ -1413,20 +1413,19 @@ async function loadNews() {
 
 function renderReports(items) {
   if (!items.length) {
-    reportList.innerHTML = '<div class="empty-state">当前筛选条件下没有可展示的年报。</div>';
+    reportList.innerHTML = '<div class="empty-state">没有找到符合条件的年报，请调整筛选条件。</div>';
     return;
   }
   const extractionStatusLabel = {
-    pending_parse: "PDF可用 · 待解析",
-    needs_review: "PDF可用 · 需复核",
-    ok: "文本可用",
+    pending_parse: "PDF 可查看 · 文本待处理",
+    needs_review: "PDF 可查看 · 文本待复核",
+    ok: "PDF 可查看 · 文本已提取",
   };
   reportList.innerHTML = items.map((report) => `
     <article class="report-card" data-report-id="${escapeHtml(report.report_id)}">
       <h3>${escapeHtml(report.title)}</h3>
       <div class="report-meta"><span>${escapeHtml(report.stock_code)} · ${escapeHtml(report.company_name || "公司名称未知")}</span><span>${escapeHtml(String(report.report_year))} 年报</span><span>${escapeHtml(formatDateTime(report.announcement_time))}</span><span>${escapeHtml(extractionStatusLabel[report.extraction_status] || report.extraction_status || "未知状态")}</span></div>
-      <div class="report-actions"><a href="/api/reports/${encodeURIComponent(report.report_id)}/download" target="_blank" rel="noreferrer">打开 PDF</a>${report.page_count > 0 ? '<button type="button" data-action="read-page">查看首页文本</button>' : '<span class="muted-text">文本提取完成后可查看</span>'}</div>
-      <div class="report-page-text" hidden></div>
+      <div class="report-actions"><a href="/api/reports/${encodeURIComponent(report.report_id)}/download" target="_blank" rel="noreferrer">打开 PDF</a></div>
     </article>`).join("");
 }
 
@@ -1439,46 +1438,19 @@ async function loadReports() {
     if (reportYear.value) params.set("report_year", reportYear.value);
     const response = await fetch(`/api/reports?${params.toString()}`);
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.detail || `财报加载失败（${response.status}）`);
+    if (!response.ok) throw new Error(payload.detail || `年报加载失败（${response.status}）`);
     renderReports(payload.items || []);
     reportSummary.textContent = `共 ${payload.total || 0} 份年报`;
     reportPageInfo.textContent = `第 ${payload.page || state.reportPage} 页`;
     prevReportPageButton.disabled = (payload.page || state.reportPage) <= 1;
     nextReportPageButton.disabled = !payload.has_next;
   } catch (error) {
-    reportList.innerHTML = `<div class="empty-state">${escapeHtml(error.message || "财报加载失败")}</div>`;
+    reportList.innerHTML = `<div class="empty-state">${escapeHtml(error.message || "年报加载失败")}</div>`;
     reportSummary.textContent = "加载失败";
     prevReportPageButton.disabled = true;
     nextReportPageButton.disabled = true;
   } finally {
     refreshReportsButton.disabled = false;
-  }
-}
-
-async function showReportPage(button) {
-  const card = button.closest(".report-card");
-  const textBox = card.querySelector(".report-page-text");
-  if (!textBox.hidden) {
-    textBox.hidden = true;
-    button.textContent = "查看首页文本";
-    return;
-  }
-  button.disabled = true;
-  button.textContent = "读取中…";
-  try {
-    const reportId = card.dataset.reportId;
-    const response = await fetch(`/api/reports/${encodeURIComponent(reportId)}/pages/1`);
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.detail || "年报文本读取失败");
-    textBox.textContent = payload.text || "该页没有可提取的文本。";
-    textBox.hidden = false;
-    button.textContent = "收起首页文本";
-  } catch (error) {
-    textBox.textContent = error.message || "年报文本读取失败";
-    textBox.hidden = false;
-    button.textContent = "收起提示";
-  } finally {
-    button.disabled = false;
   }
 }
 
@@ -1789,11 +1761,6 @@ reportFilterForm.addEventListener("submit", (event) => {
 refreshReportsButton.addEventListener("click", loadReports);
 prevReportPageButton.addEventListener("click", () => { if (state.reportPage > 1) { state.reportPage -= 1; loadReports(); } });
 nextReportPageButton.addEventListener("click", () => { state.reportPage += 1; loadReports(); });
-reportList.addEventListener("click", (event) => {
-  const button = event.target.closest('[data-action="read-page"]');
-  if (button) showReportPage(button);
-});
-
 marketForm.addEventListener("submit", (event) => event.preventDefault());
 let securityMatches = [];
 let securityActive = 0;
