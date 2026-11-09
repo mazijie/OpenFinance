@@ -513,7 +513,7 @@ function renderChart(summary, viewport = null) {
     tooltip: { trigger: "axis", axisPointer: { type: "cross" }, backgroundColor: "rgba(20, 31, 49, .94)", borderWidth: 0, textStyle: { color: "#fff" }, formatter: (params) => {
       const index = params[0]?.dataIndex ?? 0;
       const bar = bars[index];
-      const flags = [bar.is_suspended ? "停牌" : "", bar.is_st ? "ST" : "", bar.provisional ? "临时行情" : ""].filter(Boolean).join(" / ");
+      const flags = [bar.is_suspended ? "停牌" : "", bar.is_st ? "ST" : ""].filter(Boolean).join(" / ");
       return `<strong>${escapeHtml(formatDate(bar.trading_date))}</strong><br/>开盘 ${formatNumber(bar.open)}　${bar.provisional ? "最新" : "收盘"} ${formatNumber(bar.close)}<br/>最高 ${formatNumber(bar.high)}　最低 ${formatNumber(bar.low)}<br/>成交量 ${bar.volume == null ? "暂无" : formatNumber(bar.volume, 0)}${flags ? `<br/>${escapeHtml(flags)}` : ""}`;
     } },
     axisPointer: { link: [{ xAxisIndex: "all" }] },
@@ -607,7 +607,6 @@ function renderHistoryChart(viewport = null) {
   const bars = aggregateBars(daily, state.marketPeriod);
   renderChart({ bars }, viewport);
   if (daily.some((bar) => bar.provisional)) {
-    chartSubtitle.textContent += " · 含临时行情";
     const previous = state.historyBars.at(-1)?.trading_date;
     const last = daily.at(-1).trading_date;
     if (!previous) chartSubtitle.textContent += " · 暂无历史行情";
@@ -1880,12 +1879,11 @@ function renderRealtimeIndices(indices = []) {
   const bySymbol = new Map(indices.map((item) => [item.symbol, item]));
   document.getElementById("realtimeIndices").innerHTML = indexNames.map(([symbol, name]) => {
     const item = bySymbol.get(symbol);
-    if (!item) return `<div class="index-card"><span class="index-name">${name}</span><strong>—</strong><small>暂无数据</small></div>`;
+    if (!item) return `<div class="index-card"><span class="index-name">${name}</span><strong>—</strong></div>`;
     const change = Number(item.change);
     const color = change > 0 ? "market-up" : change < 0 ? "market-down" : "market-flat";
     const sign = change > 0 ? "+" : "";
-    const status = {fresh: "", closed: "休市 · ", unknown: "交易状态未知 · ", not_updated: "最近行情 · ", source_error: "最近行情 · "}[item.status] ?? "最近行情 · ";
-    return `<div class="index-card"><span class="index-name">${name}</span><strong class="${color}">${formatNumber(item.price)}</strong><span class="index-change ${color}">${sign}${formatNumber(change)}　${sign}${formatNumber(item.change_percent)}%</span><small>${status}${escapeHtml(formatRealtimeTime(item.source_time))}</small></div>`;
+    return `<div class="index-card"><span class="index-name">${name}</span><strong class="${color}">${formatNumber(item.price)}</strong><span class="index-change ${color}">${sign}${formatNumber(change)}　${sign}${formatNumber(item.change_percent)}%</span><small>${escapeHtml(formatRealtimeTime(item.source_time))}</small></div>`;
   }).join("");
 }
 renderRealtimeIndices();
@@ -1956,11 +1954,9 @@ async function loadRealtimeQuotes() {
     }
     const market = data.market;
     renderRealtimeIndices(data.indices || []);
-    const roundTime = market ? new Date(market.round_id).getTime() : NaN;
-    const oldRound = Number.isFinite(roundTime) && Date.now() - roundTime > 300000;
     overview.innerHTML = market
-      ? [["上涨", market.rising, "market-up"], ["下跌", market.falling, "market-down"], ["平盘", market.flat, "market-flat"]].map(([label, value, color]) => `<span class="breadth-item">${label}<strong class="${color}">${escapeHtml(String(value))}</strong></span>`).join("") + `<span class="market-meta">${escapeHtml(formatRealtimeTime(market.round_id))}${oldRound ? " · 最近数据" : ""}${market.complete ? "" : " · 部分行情暂未纳入"}</span>`
-      : "涨跌数据暂无数据";
+      ? [["上涨", market.rising, "market-up"], ["下跌", market.falling, "market-down"], ["平盘", market.flat, "market-flat"]].map(([label, value, color]) => `<span class="breadth-item">${label}<strong class="${color}">${escapeHtml(String(value))}</strong></span>`).join("") + `<span class="market-meta">${escapeHtml(formatRealtimeTime(market.round_id))}</span>`
+      : "";
   } catch (error) {
     if (error.name === "AbortError" || requestId !== realtimeRequestId) return;
     const updateChart = state.marketPeriod !== "intraday" && state.historyReady && !state.historyLoading;
@@ -1971,7 +1967,7 @@ async function loadRealtimeQuotes() {
     stockPriceTime.textContent = "行情暂不可用";
     clearStockMetrics();
     renderRealtimeIndices();
-    overview.textContent = "涨跌数据暂不可用";
+    overview.textContent = "";
   }
 }
 loadRealtimeQuotes();
