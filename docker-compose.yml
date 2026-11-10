@@ -627,7 +627,7 @@ services:
       QUOTE_SYMBOLS: ${QUOTE_SYMBOLS:-600519.SH,000001.SZ}
       QUOTE_MODE: ${QUOTE_MODE:-live}
       DATABASE_URL: postgresql://openfinance:openfinance@postgres:5432/openfinance
-      CALENDAR_URL: http://backend:8000/internal/jobs/investment-monitor/trading-day
+      CALENDAR_URL: http://backend:8000/internal/jobs/trading-day
       UNIVERSE_URL: http://backend:8000/internal/jobs/realtime-universe
       OPENFINANCE_INTERNAL_API_TOKEN: ${OPENFINANCE_INTERNAL_API_TOKEN:-replace-with-a-shared-internal-token}
     command: ["python", "-m", "realtime.collector"]
