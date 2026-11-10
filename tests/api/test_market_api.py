@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -20,6 +21,13 @@ class FakeFinanceService:
 
     def list_security_options(self):
         return SecurityOptionsResult(items=[])
+
+    def history_table(self):
+        return SimpleNamespace(
+            metadata=SimpleNamespace(table_uuid="00000000-0000-0000-0000-000000000001"),
+            current_snapshot=lambda: SimpleNamespace(snapshot_id=1234567890123456789),
+            snapshot_by_id=lambda snapshot_id: object() if snapshot_id == 1234567890123456789 else None,
+        )
 
 
 def _summary() -> MarketSummary:
@@ -118,9 +126,9 @@ def test_market_api_validates_selector_and_date_range() -> None:
         app.dependency_overrides.clear()
 
 
-def test_history_pages_align_to_period_and_preserve_empty_gap() -> None:
+def test_history_pages_align_to_period_and_preserve_empty_gap(monkeypatch) -> None:
     service = FakeFinanceService(MarketSearchResult(items=[]))
-    service.has_history_before = lambda symbol, adjustment_type, before, as_of: True
+    monkeypatch.setattr("backend.api.market.has_earlier", lambda **kwargs: True)
     app.dependency_overrides[get_finance_service] = lambda: service
     try:
         client = TestClient(app)
@@ -133,5 +141,63 @@ def test_history_pages_align_to_period_and_preserve_empty_gap() -> None:
         response = client.get("/api/market/history", params={"symbol": "600519.SH", "period": "monthly", "before": "2026-08-01"})
         assert response.json()["start_date"].endswith("-01")
         assert response.json()["end_date"] == "2026-07-31"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_history_returns_pending_and_checks_same_snapshot(monkeypatch) -> None:
+    service = FakeFinanceService(MarketSearchResult(items=[_summary()]))
+    calls = []
+    service.has_history_before = lambda *args, **kwargs: calls.append((args, kwargs)) or True
+    monkeypatch.setattr("backend.api.market.has_earlier", lambda **kwargs: None)
+    app.dependency_overrides[get_finance_service] = lambda: service
+    try:
+        client = TestClient(app)
+        data = client.get("/api/market/history", params={"symbol": "600519.SH"}).json()
+        assert data["has_more"] is None
+        assert data["snapshot_id"] == "1234567890123456789"
+        assert not calls
+        response = client.get("/api/market/history/availability", params={
+            "symbol": "600519.SH", "before": data["next_before"],
+            "snapshot_id": data["snapshot_id"], "table_uuid": data["table_uuid"],
+            "query_time": data["query_time"],
+        })
+        assert response.status_code == 200 and response.json() == {"has_more": True}
+        assert calls[0][1]["snapshot_id"] == 1234567890123456789
+        assert service.calls[0]["snapshot_id"] == 1234567890123456789
+        bad = client.get("/api/market/history/availability", params={
+            "symbol": "600519.SH", "before": data["next_before"], "snapshot_id": "99",
+            "table_uuid": data["table_uuid"], "query_time": data["query_time"],
+        })
+        assert bad.status_code == 410
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_history_uses_index_without_synchronous_fallback(monkeypatch) -> None:
+    service = FakeFinanceService(MarketSearchResult(items=[_summary()]))
+    monkeypatch.setattr("backend.api.market.has_earlier", lambda **kwargs: False)
+    app.dependency_overrides[get_finance_service] = lambda: service
+    try:
+        data = TestClient(app).get("/api/market/history", params={"symbol": "600519.SH"}).json()
+        assert data["has_more"] is False
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_history_returns_busy_if_scan_queue_is_full(monkeypatch) -> None:
+    from contextlib import contextmanager
+
+    class BusyGate:
+        @contextmanager
+        def acquire(self, *, page):
+            raise TimeoutError("Market history is busy; please retry")
+            yield
+
+    monkeypatch.setattr("backend.api.market.market_query_gate", BusyGate())
+    app.dependency_overrides[get_finance_service] = lambda: FakeFinanceService(MarketSearchResult())
+    try:
+        response = TestClient(app).get("/api/market/history", params={"symbol": "600519.SH"})
+        assert response.status_code == 503
     finally:
         app.dependency_overrides.clear()

@@ -63,12 +63,12 @@ def test_frontend_page_and_assets() -> None:
     assert "/api/chat" in script_response.text
     assert "/api/news" in script_response.text
     assert "/api/market" in script_response.text
-    assert "/api/watchlist" in script_response.text
-    assert "/api/monitor/reports" in script_response.text
+    assert "/api/watchlist" not in script_response.text
+    assert "/api/monitor/reports" not in script_response.text
     assert "/api/agent/threads" in script_response.text
     assert "echarts" in page_response.text
     assert "marketChart" in page_response.text
-    assert "monitorReportList" in page_response.text
+    assert "monitorReportList" not in page_response.text
     assert 'data-page="monitorPage"' not in page_response.text
     assert 'data-action="open-monitor-dashboard"' not in script_response.text
     assert 'id="marketPage"' in page_response.text

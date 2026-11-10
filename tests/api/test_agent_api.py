@@ -35,7 +35,7 @@ class FakeHarnessService:
             thread_id=self.thread.thread_id,
             turn_id=self.turn.turn_id,
             call_id="call-1",
-            tool_name="add_watchlist_item",
+            tool_name="example_write_tool",
             proposed_action={"symbol": "000001.SZ"},
             status="pending",
             idempotency_key="approval-key",

@@ -25,6 +25,8 @@ class FinanceService:
         adjustment_type: str | None = None,
         as_of: datetime | None = None,
         limit: int = 500,
+        table=None,
+        snapshot_id=None,
     ) -> MarketSearchResult:
         resolved_end = end_date or datetime.now(UTC).date()
         resolved_start = start_date or (resolved_end - timedelta(days=settings.FINANCE_DEFAULT_LOOKBACK_DAYS))
@@ -37,7 +39,7 @@ class FinanceService:
             as_of=as_of or datetime.now(UTC),
             limit=limit,
         )
-        items = self.repository.search_market(params)
+        items = self.repository.search_market(params, table=table, snapshot_id=snapshot_id) if table is not None else self.repository.search_market(params)
         if not items:
             selector = params.security_id or params.symbol or "requested security"
             return MarketSearchResult(items=[], message=f"No internal market data found for {selector}.")
@@ -46,8 +48,13 @@ class FinanceService:
     def list_security_options(self) -> SecurityOptionsResult:
         return SecurityOptionsResult(items=self.repository.list_security_options())
 
-    def has_history_before(self, symbol: str, adjustment_type: str, before: date, as_of: datetime) -> bool:
-        return self.repository.writer.has_daily_bars_before(symbol=symbol, adjustment_type=adjustment_type, before=before, as_of=as_of)
+    def history_table(self):
+        from backend.lakehouse.catalog import get_catalog
+        from backend.lakehouse.finance_tables import finance_table_identifier
+        return get_catalog().load_table(finance_table_identifier(settings.ICEBERG_DAILY_BARS_TABLE))
+
+    def has_history_before(self, symbol: str, adjustment_type: str, before: date, as_of: datetime, *, table=None, snapshot_id=None) -> bool:
+        return self.repository.writer.has_daily_bars_before(symbol=symbol, adjustment_type=adjustment_type, before=before, as_of=as_of, table=table, snapshot_id=snapshot_id)
 
     def is_trading_day(self, trading_date: date) -> bool | None:
         return self.repository.is_trading_day(trading_date)

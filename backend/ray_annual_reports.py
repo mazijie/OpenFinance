@@ -85,10 +85,9 @@ def _preflight_manifest_impl(manifest_path: str) -> dict[str, Any]:
 def _materialize_silver_impl(parse_result: dict[str, Any]) -> dict[str, Any]:
     from backend.pipelines.annual_reports_ir_to_silver import AnnualReportsIRToSilverPipeline
 
-    stats = AnnualReportsIRToSilverPipeline().run([parse_result]).to_dict()
-    if stats["failed_count"]:
-        raise RuntimeError(f"Annual-report Silver materialization failed: {stats}")
-    return stats
+    # Propagate the original exception to the Ray job log instead of reducing
+    # it to failed_count=1, which hides the reason from operators.
+    return AnnualReportsIRToSilverPipeline().process_result(parse_result).to_dict()
 
 
 def run_job(manifest_paths: list[str], *, force: bool = False) -> dict[str, Any]:

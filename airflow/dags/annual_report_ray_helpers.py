@@ -8,6 +8,15 @@ import time
 from urllib.request import Request, urlopen
 
 
+class TerminalRayJobError(RuntimeError):
+    """A remote job has definitely ended and can safely be resubmitted."""
+
+    def __init__(self, job_id: str, status: str):
+        self.job_id = job_id
+        self.status = status
+        super().__init__(f"Ray annual-report job {job_id} ended with status={status}")
+
+
 def _request(
     method: str,
     path: str,
@@ -58,8 +67,8 @@ def submit_and_wait_annual_report_ray(manifest_paths: list[str], *, force: bool 
             last_status = status
         if status == "succeeded":
             return {"job_id": job_id, "status": status}
-        if status in {"failed", "stopped", "stopping"}:
-            raise RuntimeError(f"Ray annual-report job {job_id} ended with status={status}")
+        if status in {"failed", "stopped"}:
+            raise TerminalRayJobError(job_id, status)
         time.sleep(poll_seconds)
     # We deliberately do not submit a replacement automatically: the remote
     # Job may still be RUNNING and must be inspected before retrying.
@@ -67,6 +76,31 @@ def submit_and_wait_annual_report_ray(manifest_paths: list[str], *, force: bool 
         f"Ray annual-report job {job_id} exceeded RAY_JOB_TIMEOUT_SECONDS; "
         "inspect/stop the remote job before manually retrying this Airflow batch"
     )
+
+
+def replay_reports_individually(paths: list[str], *, max_attempts: int = 3, retry_delay: float = 30) -> dict[str, object]:
+    """Retry only confirmed terminal failures; preserve unresolved work in XCom."""
+    if max_attempts < 1 or retry_delay < 0:
+        raise ValueError("max_attempts must be positive and retry_delay nonnegative")
+    failures: list[dict[str, object]] = []
+    processed = 0
+    for position, path in enumerate(dict.fromkeys(paths), start=1):
+        print(f"Annual report {position}/{len(paths)}: {path}", flush=True)
+        failed_jobs: list[str] = []
+        for attempt in range(1, max_attempts + 1):
+            try:
+                submit_and_wait_annual_report_ray([path], force=False)
+                processed += 1
+                break
+            except TerminalRayJobError as exc:
+                failed_jobs.append(exc.job_id)
+                print(f"Annual report failed: {path}: attempt={attempt}/{max_attempts}: {exc}", flush=True)
+                if attempt < max_attempts:
+                    time.sleep(retry_delay * (2 ** (attempt - 1)))
+                else:
+                    failures.append({"manifest_path": path, "job_ids": failed_jobs, "error": str(exc)})
+    print(f"Annual report replay completed: succeeded={processed}, failed={len(failures)}", flush=True)
+    return {"processed_reports": processed, "failed_reports": len(failures), "failures": failures}
 
 
 def collect_manifest_paths(batch_results: list[list[dict[str, object]]]) -> list[str]:

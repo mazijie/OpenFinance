@@ -54,23 +54,36 @@ class CNInfoCollector:
             "sortType": "",
             "isHLtitle": "true",
         }
-        try:
-            response = self.client.post(
-                self.QUERY_URL,
-                data=params,
-                headers={"User-Agent": settings.CNINFO_USER_AGENT, "Referer": "https://www.cninfo.com.cn/"},
-            )
-            response.raise_for_status()
-            payload = response.json()
-        except (httpx.HTTPError, ValueError) as exc:
-            raise CNInfoCollectorError(f"CNInfo announcement query failed: {exc}") from exc
-
-        rows = payload.get("announcements", []) if isinstance(payload, dict) else []
         reports: list[AnnualReportAnnouncement] = []
-        for row in rows if isinstance(rows, list) else []:
-            report = self._parse_announcement(row, code=code, exchange=exchange)
-            if report and report.report_year == report_year and self._is_full_report(report.title):
-                reports.append(report)
+        seen_pages: set[tuple[str, ...]] = set()
+        while True:
+            try:
+                response = self.client.post(
+                    self.QUERY_URL, data=params,
+                    headers={"User-Agent": settings.CNINFO_USER_AGENT, "Referer": "https://www.cninfo.com.cn/"},
+                )
+                response.raise_for_status()
+                payload = response.json()
+            except (httpx.HTTPError, ValueError) as exc:
+                raise CNInfoCollectorError(f"CNInfo announcement query failed: {exc}") from exc
+            if not isinstance(payload, dict) or not isinstance(payload.get("announcements"), (list, type(None))):
+                raise CNInfoCollectorError("CNInfo returned an invalid announcement response")
+            rows = payload.get("announcements") or []
+            if not rows:
+                break
+            if any(not isinstance(row, dict) for row in rows):
+                raise CNInfoCollectorError("CNInfo returned an invalid announcement row")
+            page_ids = tuple(str(row.get("announcementId") or "") for row in rows)
+            if page_ids in seen_pages:
+                raise CNInfoCollectorError("CNInfo returned a repeated announcement page")
+            seen_pages.add(page_ids)
+            for row in rows:
+                report = self._parse_announcement(row, code=code, exchange=exchange)
+                if report and report.report_year == report_year and self._is_full_report(report.title):
+                    reports.append(report)
+            if not payload.get("hasMore", len(rows) >= page_size):
+                break
+            params["pageNum"] += 1
         return reports
 
     def download_pdf(self, report: AnnualReportAnnouncement) -> bytes:

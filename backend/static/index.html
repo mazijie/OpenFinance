@@ -113,39 +113,6 @@
         </section>
       </section>
 
-      <section class="page-view monitor-page" id="monitorPage" aria-label="投研监测" hidden>
-        <section class="watchlist-panel panel">
-          <div class="section-heading">
-            <div><p class="eyebrow">WATCHLIST</p><h2>监护清单</h2></div>
-            <button class="icon-button" type="button" id="refreshWatchlistButton" title="刷新监护清单">↻</button>
-          </div>
-          <form class="watchlist-form" id="watchlistForm">
-            <label class="field">证券代码<input id="watchlistSymbol" name="symbol" maxlength="16" placeholder="600519.SH" required /></label>
-            <label class="field">涨跌阈值<input id="priceMoveThreshold" name="price_move" type="number" min="0" max="1" step="0.01" value="0.03" required /></label>
-            <label class="field">量能倍数<input id="volumeRatioThreshold" name="volume_ratio" type="number" min="1" max="20" step="0.1" value="1.8" required /></label>
-            <button class="primary-button" type="submit">加入清单</button>
-          </form>
-          <div class="monitor-message" id="watchlistMessage" role="status">选择需要持续关注的 A 股证券。</div>
-          <div class="watchlist-list" id="watchlistList"></div>
-        </section>
-
-        <section class="inbox-panel panel">
-          <div class="section-heading">
-            <div><p class="eyebrow">RESEARCH INBOX</p><h2>收盘后监测日报</h2></div>
-            <div class="heading-actions">
-              <button class="secondary-button" type="button" id="runMonitorButton">立即运行</button>
-              <button class="icon-button" type="button" id="refreshMonitorButton" title="刷新监测报告">↻</button>
-            </div>
-          </div>
-          <form class="monitor-filters" id="monitorFilterForm">
-            <label class="field">交易日<input id="monitorTradingDate" name="trading_date" type="date" /></label>
-            <label class="field">状态<select id="monitorStatus" name="status"><option value="">全部</option><option value="ready">可研判</option><option value="degraded">降级</option><option value="failed">失败</option></select></label>
-            <button class="primary-button" type="submit">筛选</button>
-          </form>
-          <div class="monitor-message" id="monitorMessage" role="status">正在读取监测报告。</div>
-          <div class="monitor-report-list" id="monitorReportList"></div>
-        </section>
-      </section>
     </main>
   </body>
 </html>

@@ -10,7 +10,7 @@ OpenFinance is an open-source research platform for China’s financial markets.
 - **News and annual reports:** Ingests and normalizes news and company reports; parses annual-report PDFs into searchable, page-linked evidence.
 - **Evidence-based research:** Provides a browser UI and LangGraph research agent with persistent sessions, streaming answers, approval and resume flows, and citations from market, news, and report sources. Hybrid retrieval uses PostgreSQL with pgvector and OpenSearch.
 - **Data processing:** Stores raw data in MinIO Bronze, curated tables in Iceberg Silver, and calculated daily indicators in Gold. Airflow schedules ingestion and processing; Spark builds and maintains analytical tables.
-- **Monitoring and live quotes:** Retains investment-monitoring APIs and reports, while scheduled monitoring is disabled by default. A Kafka and Flink pipeline collects market snapshots; its windows are sampled statistics, not tick-by-tick trades.
+- **Live quotes:** A Kafka and Flink pipeline collects market snapshots; its windows are sampled statistics, not tick-by-tick trades.
 
 The research agent can search approved public websites when internal sources do not provide evidence. Web access is restricted to HTTPS and configured allowlisted domains. Market-data APIs read the local lakehouse and do not contact providers at query time.
 
@@ -41,7 +41,7 @@ docker compose ps
 
 The default stack includes the backend, PostgreSQL, MinIO, OpenSearch, local Ollama embeddings, workers, Spark, Airflow, and the real-time quote pipeline. The backend runs `alembic upgrade head` before starting the API. Ollama downloads the configured embedding model during initialization, so the first startup may take a while and use significant disk space.
 
-Detailed pipeline behavior, configuration, and operational limits are documented in the [finance pipeline guide](docs/finance-pipeline-guide.md), [Spark guide](spark/README.md), [investment monitoring guide](docs/investment-monitor.md), and [real-time quotes guide](docs/realtime-quotes.md).
+Detailed pipeline behavior, configuration, and operational limits are documented in the [finance pipeline guide](docs/finance-pipeline-guide.md), [Spark guide](spark/README.md), and [real-time quotes guide](docs/realtime-quotes.md).
 
 ### Service URLs
 

@@ -71,7 +71,7 @@ class NewsBronzeToSilverPipeline:
     ) -> PipelineStats:
         """Run normalization for one or many Bronze objects."""
 
-        paths = list(object_paths) if object_paths is not None else self.bronze_writer.list_objects(prefix=prefix or "news/provider=juhe/")
+        paths = list(object_paths) if object_paths is not None else self.bronze_writer.list_objects(prefix=prefix or "news/")
         stats = PipelineStats()
         for object_path in paths:
             object_stats = self.process_object(object_path)
@@ -145,21 +145,24 @@ class NewsBronzeToSilverPipeline:
         if not url:
             raise ValueError("invalid url")
 
-        published_at = parse_possible_datetime(article.get("date")) or parse_possible_datetime(article.get("published")) or parse_possible_datetime(article.get("datetime")) or ensure_utc(ingested_at)
+        published_at = parse_possible_datetime(article.get("date")) or parse_possible_datetime(article.get("published")) or parse_possible_datetime(article.get("datetime"))
+        if provider == "caixin" and published_at is None:
+            raise ValueError("missing publication time")
+        published_at = published_at or ensure_utc(ingested_at)
         assert published_at is not None
 
         external_news_id = self._normalize_optional_text(article.get("uniquekey") or article.get("external_news_id"))
         content = self._normalize_optional_text(article.get("content"))
-        if not content:
+        summary = self._normalize_optional_text(article.get("summary") or article.get("abstract") or (article.get("title") if provider != "caixin" else None))
+        if not content and not (provider == "caixin" and summary):
             raise ValueError("empty content")
 
-        summary = self._normalize_optional_text(article.get("summary") or article.get("abstract") or article.get("title"))
         source_name = self._normalize_optional_text(article.get("author_name") or article.get("source_name") or article.get("source"))
         category = self._normalize_optional_text(article.get("category"))
         cover_image_url = self._normalize_optional_text(article.get("thumbnail_pic_s") or article.get("cover_image_url"))
         language = self._normalize_optional_text(article.get("language")) or "zh-cn"
         symbols, entities = self.symbol_matcher.extract(title, summary, content)
-        content_hash = sha256_text(f"{title.casefold()}|{url.casefold()}")
+        content_hash = sha256_text(f"caixin|{external_news_id}" if provider == "caixin" and external_news_id else f"{title.casefold()}|{url.casefold()}")
 
         return NewsArticleRecord(
             news_id=str(uuid5(NAMESPACE_URL, content_hash)),

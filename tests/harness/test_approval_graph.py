@@ -24,14 +24,14 @@ pytestmark = pytest.mark.skipif(
 
 
 @tool
-def add_watchlist_item(symbol: str) -> str:
-    """Add a watchlist item after approval."""
+def example_write_tool(symbol: str) -> str:
+    """Perform a test action after approval."""
     return json.dumps({"added": symbol})
 
 
 class FakeTools:
-    tools = [add_watchlist_item]
-    tool_map = {"add_watchlist_item": add_watchlist_item}
+    tools = [example_write_tool]
+    tool_map = {"example_write_tool": example_write_tool}
 
 
 class BoundFakeClient:
@@ -49,7 +49,7 @@ class BoundFakeClient:
                 content="",
                 tool_calls=[
                     {
-                        "name": "add_watchlist_item",
+                        "name": "example_write_tool",
                         "args": {"symbol": "000001.SZ"},
                         "id": "call-write",
                         "type": "tool_call",
@@ -158,7 +158,8 @@ class CountingAnalyzer:
         )
 
 
-def test_write_tool_pauses_and_resumes_after_approval():
+def test_write_tool_pauses_and_resumes_after_approval(monkeypatch):
+    monkeypatch.setattr("backend.harness.policy.WRITE_TOOLS", {"example_write_tool"})
     store = FakeStore()
     llm = FakeLLM()
     analyzer = CountingAnalyzer()

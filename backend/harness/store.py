@@ -107,7 +107,7 @@ class HarnessStore:
                     thread_id uuid NOT NULL REFERENCES {self._schema}.agent_threads(thread_id) ON DELETE CASCADE,
                     seq bigint NOT NULL,
                     role text NOT NULL CHECK (role IN ('user','assistant','system')),
-                    kind text NOT NULL CHECK (kind IN ('text','tool','approval','monitor_report','system')),
+                    kind text NOT NULL CHECK (kind IN ('text','tool','approval','system')),
                     content text NOT NULL DEFAULT '',
                     citations jsonb NOT NULL DEFAULT '[]'::jsonb,
                     payload jsonb NOT NULL DEFAULT '{{}}'::jsonb,
@@ -195,9 +195,6 @@ class HarnessStore:
             )
             cur.execute(
                 f"CREATE INDEX IF NOT EXISTS web_documents_canonical_idx ON {self._schema}.web_documents (canonical_url, fetched_at DESC)"
-            )
-            cur.execute(
-                f"ALTER TABLE {self._schema}.monitor_runs ADD COLUMN IF NOT EXISTS origin_thread_id uuid"
             )
             self._seed_web_domains(cur)
 
@@ -871,50 +868,6 @@ class HarnessStore:
             )
             row = cur.fetchone()
         return WebDocument.model_validate({**row, "document_id": str(row["document_id"])}) if row else None
-
-    def append_monitor_report_message(
-        self,
-        *,
-        thread_id: str,
-        report: dict[str, Any],
-    ) -> AgentMessage:
-        report_id = str(report.get("report_id") or "")
-        if report_id:
-            with self._connection() as conn, conn.cursor() as cur:
-                cur.execute(
-                    f"""
-                    SELECT message_id FROM {self._schema}.agent_messages
-                    WHERE thread_id = %s AND kind = 'monitor_report'
-                      AND payload->>'report_id' = %s
-                    LIMIT 1
-                    """,
-                    (UUID(thread_id), report_id),
-                )
-                existing = cur.fetchone()
-            if existing:
-                message = self.get_message(str(existing[0]))
-                if message is not None:
-                    return message
-        message_report = dict(report)
-        if not settings.INVESTMENT_MONITOR_RECOMMENDATIONS_ENABLED:
-            message_report["recommendation_5d"] = None
-            message_report["recommendation_20d"] = None
-            message_report["model_metadata"] = {
-                **dict(message_report.get("model_metadata") or {}),
-                "shadow_mode": True,
-            }
-        summary = (
-            f"{message_report.get('trading_date')} · {message_report.get('symbol')} {message_report.get('name')}\n"
-            f"状态：{message_report.get('status')} / {message_report.get('data_status')}\n"
-            f"{message_report.get('analysis') or '未生成分析文本'}"
-        )
-        return self.append_message(
-            thread_id=thread_id,
-            role="assistant",
-            kind="monitor_report",
-            content=summary,
-            payload={"report_id": message_report.get("report_id"), "report": message_report},
-        )
 
     def prune_archived_checkpoints(self, *, older_than_days: int) -> int:
         """Remove LangGraph checkpoints for archived, inactive threads."""

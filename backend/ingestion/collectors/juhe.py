@@ -39,7 +39,7 @@ class JuheCollector:
             raise JuheCollectorError("JUHE_NEWS_API_KEY is not configured")
 
         known_ids = existing_external_ids or set()
-        target_count = max(1, limit or settings.NEWS_INGEST_LIMIT)
+        target_count = max(1, limit or settings.NEWS_DEFAULT_LIMIT)
         page_size = max(1, min(target_count, settings.JUHE_NEWS_LIST_PAGE_SIZE))
         max_pages = max(1, settings.JUHE_NEWS_MAX_PAGES)
 

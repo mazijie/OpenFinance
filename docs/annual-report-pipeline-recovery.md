@@ -2,6 +2,26 @@
 
 本文记录年报 PDF 从 Bronze 到检索索引的恢复设计、实施过程中发现的问题和验证结果。Silver/Gold 是可重建投影；Bronze PDF 和 Derived Document IR 是优先复用的持久化产物。
 
+## 在 Airflow 手动采集年报
+
+在 Airflow 中打开 DAG，选择 **Trigger DAG with config**，填写表单后触发：
+
+- `openfinance_annual_report_pipeline`：采集指定证券。在“年报年份”填写 JSON 数组，例如 `[2022, 2023, 2024]`；在“证券代码”每行填写一个代码，例如 `600519.SH`。
+- `openfinance_annual_report_full_backfill`：采集当前全市场 A 股。在“年报年份”填写 JSON 数组，并可调整每批证券数量。每批采集完成后，解析阶段逐份提交 Ray，且同一时间只处理一份报告。全市场任务会下载和处理大量报告，耗时可能较长。
+- `openfinance_annual_report_bronze_replay`：只重放已有 Bronze 报告，不负责从巨潮发现新报告。按下面的 JSON 示例传入年份和证券。
+
+手动参数仅影响本次运行。定时任务使用环境变量 `CNINFO_REPORT_YEARS_JSON` 和 `CNINFO_REPORT_STOCKS_JSON`；全市场手动任务在未指定年份时使用环境变量，未配置时默认上一自然年。手动采集时所选年份应为已经公布的报告年度，能否找到报告取决于巨潮公告。
+
+## 2026-11-10：重复表格片段导致 Silver 写入失败
+
+2024 年的 300815、300851、300855 年报均已完成解析，但 Silver 写入报 `Duplicate rows found in source dataset based on the key columns`。实际 Document IR 中有重复的表格行组；切块重复表头后，产生了内容、位置和区域均相同的片段。原 chunk ID 只根据内容和位置生成，导致一次 upsert 中出现重复主键。尚未对照原始 PDF 判断重复行来自原表还是表格识别。
+
+切块现在按相同内容的出现次数生成稳定的不同 ID，保留全部片段及其行。首次出现的 ID 保持原算法。Silver 阶段向 Ray 日志传递原始异常，便于定位后续问题。
+
+全市场回填逐份处理报告：只有 Ray 作业明确返回 `failed` 或 `stopped` 时才重新提交，默认每份最多 3 次，初始等待 30 秒并指数退避，可分别通过 `ANNUAL_REPORT_REPLAY_MAX_ATTEMPTS`、`ANNUAL_REPORT_REPLAY_RETRY_DELAY_SECONDS` 设置。仍失败的报告不会使同批成功结果失败，路径和每次失败的 job ID 保存在该 `ray_replay` 映射任务的 XCom 返回值 `failures` 中，也会写入日志；所有报告均未成功时最终任务仍会失败。提交、通信超时等状态不明的作业不会自动重提，必须先确认原作业状态，避免重复执行。
+
+兜底可通过 `openfinance_annual_report_recovery` 对账，基于 Bronze、Derived 与 Silver 产物识别缺失阶段并恢复；按 `report_ids` 可限制范围。阶段达到 `ANNUAL_REPORT_MAX_STAGE_ATTEMPTS` 后不再自动入队，需要先检查错误和状态。已经运行中的 Airflow 任务不会因源码更新而自动改变其已加载的重试行为；不要与进行中的回填并发重跑同一报告。
+
 ## 2026-10-28：重建 Silver 后前端年报列表为空
 
 **现象**

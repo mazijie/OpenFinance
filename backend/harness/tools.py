@@ -4,24 +4,19 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, Field, model_validator
 
-from backend.config import settings
 from backend.harness.evidence import EvidenceService
 from backend.schemas.harness import EvidenceDocument
 from backend.services.realtime_quote_service import RealtimeQuoteService
 from backend.harness.policy import PolicyGuard
 from backend.harness.store import HarnessStore
 from backend.harness.web import WebResearchService
-from backend.monitoring.store import MonitorStore
-from backend.schemas.monitor import MonitorRunRequest, WatchlistItemCreate, WatchlistItemPatch
 from backend.services.finance_service import FinanceService
-from backend.services.investment_monitor_service import InvestmentMonitorService
-from backend.services.watchlist_service import WatchlistService
 
 
 @dataclass(slots=True)
@@ -82,37 +77,6 @@ class WebFetchInput(BaseModel):
     url: str
 
 
-class AddWatchlistInput(BaseModel):
-    symbol: str
-    price_move: float = 0.03
-    volume_ratio: float = 1.8
-    note: str | None = None
-
-
-class UpdateWatchlistInput(BaseModel):
-    symbol: str
-    enabled: bool | None = None
-    price_move: float | None = None
-    volume_ratio: float | None = None
-    note: str | None = None
-
-
-class DeleteWatchlistInput(BaseModel):
-    symbol: str
-
-
-class SubmitMonitorInput(BaseModel):
-    trading_date: date | None = None
-    cutoff_at: datetime | None = None
-
-
-class MonitorLookupInput(BaseModel):
-    run_id: str | None = None
-    report_id: str | None = None
-    symbol: str | None = None
-    limit: int = Field(default=10, ge=1, le=50)
-
-
 class ToolRegistry:
     """Build one allowlisted tool set for a harness run."""
 
@@ -120,13 +84,9 @@ class ToolRegistry:
         self,
         *,
         context: ToolContext,
-        watchlist_service: WatchlistService | None = None,
-        monitor_store: MonitorStore | None = None,
         finance_service: FinanceService | None = None,
     ) -> None:
         self.context = context
-        self.watchlist_service = watchlist_service or WatchlistService()
-        self.monitor_store = monitor_store or MonitorStore()
         self.finance_service = finance_service or FinanceService()
         self._tools = self._build_tools()
 
@@ -141,9 +101,6 @@ class ToolRegistry:
     def _build_tools(self) -> list[BaseTool]:
         def research_search(**kwargs: Any) -> str:
             request = ResearchSearchInput.model_validate(kwargs)
-            if self.context.run_kind == "monitor":
-                request.sources = [source for source in request.sources if source != "web"]
-                request.web_urls = []
             allowed = PolicyGuard.allowed_sources(self.context.run_kind)
             request.sources = [source for source in request.sources if source in allowed]
             pack = self.context.evidence_service.search(
@@ -221,9 +178,6 @@ class ToolRegistry:
             ][:10]
             return _dump({"query": query, "matches": matches})
 
-        def list_watchlist() -> str:
-            return _dump({"items": [item.model_dump(mode="json") for item in self.watchlist_service.list()]})
-
         def realtime_quote(symbol: str) -> str:
             try:
                 result = RealtimeQuoteService().lookup(symbol, as_of=self.context.as_of)
@@ -255,85 +209,8 @@ class ToolRegistry:
                 return _dump({"documents": [document.model_dump(mode="json")], "message": "没有更新", "status": "unavailable"})
 
         def fetch_web_page(url: str) -> str:
-            if self.context.run_kind != "interactive":
-                return _dump({"error": "Web retrieval is disabled for monitor runs"})
             page = self.context.web_service.fetch(url)
             return _dump(page.model_dump(mode="json"))
-
-        def add_watchlist_item(symbol: str, price_move: float = 0.03, volume_ratio: float = 1.8, note: str | None = None) -> str:
-            item = self.watchlist_service.create(
-                WatchlistItemCreate(
-                    symbol=symbol,
-                    thresholds={"price_move": price_move, "volume_ratio": volume_ratio},
-                    note=note,
-                )
-            )
-            return _dump({"item": item.model_dump(mode="json")})
-
-        def update_watchlist_item(
-            symbol: str,
-            enabled: bool | None = None,
-            price_move: float | None = None,
-            volume_ratio: float | None = None,
-            note: str | None = None,
-        ) -> str:
-            thresholds = None
-            if price_move is not None or volume_ratio is not None:
-                current = self.watchlist_service.get(symbol)
-                if current is None:
-                    raise ValueError("Watchlist item not found")
-                thresholds = {
-                    "price_move": price_move if price_move is not None else current.thresholds.price_move,
-                    "volume_ratio": volume_ratio if volume_ratio is not None else current.thresholds.volume_ratio,
-                }
-            item = self.watchlist_service.update(
-                symbol,
-                WatchlistItemPatch(
-                    enabled=enabled,
-                    thresholds=thresholds,
-                    note=note,
-                ),
-            )
-            if item is None:
-                raise ValueError("Watchlist item not found")
-            return _dump({"item": item.model_dump(mode="json")})
-
-        def delete_watchlist_item(symbol: str) -> str:
-            return _dump({"deleted": self.watchlist_service.delete(symbol), "symbol": symbol.upper()})
-
-        def submit_monitor_run(trading_date: date | None = None, cutoff_at: datetime | None = None) -> str:
-            accepted = InvestmentMonitorService(
-                store=self.monitor_store,
-                harness_store=self.context.store,
-            ).create_run(
-                MonitorRunRequest(
-                    trading_date=trading_date,
-                    cutoff_at=cutoff_at,
-                    thread_id=self.context.thread_id,
-                )
-            )
-            return _dump(accepted.model_dump(mode="json"))
-
-        def get_monitor_status(run_id: str | None = None) -> str:
-            if not run_id:
-                return _dump({"error": "run_id is required"})
-            run = self.monitor_store.get_run(run_id)
-            return _dump({"run": run.model_dump(mode="json") if run else None})
-
-        def list_monitor_reports(symbol: str | None = None, limit: int = 10) -> str:
-            reports, total = self.monitor_store.list_reports(symbol=symbol, limit=limit)
-            return _dump(
-                {
-                    "total": total,
-                    "items": [_public_monitor_report(report) for report in reports],
-                }
-            )
-
-        def get_monitor_report(report_id: str | None = None) -> str:
-            if not report_id:
-                return _dump({"error": "report_id is required"})
-            report = self.monitor_store.get_report(report_id)
-            return _dump({"report": _public_monitor_report(report) if report else None})
 
         return [
             StructuredTool.from_function(
@@ -365,71 +242,13 @@ class ToolRegistry:
                 args_schema=ResolveSecurityInput,
             ),
             StructuredTool.from_function(
-                func=list_watchlist,
-                name="list_watchlist",
-                description="List the current investment watchlist.",
-            ),
-            StructuredTool.from_function(
                 func=fetch_web_page,
                 name="fetch_web_page",
                 description="Fetch one explicitly provided URL from the configured authoritative allowlist.",
                 args_schema=WebFetchInput,
-            ),
-            StructuredTool.from_function(
-                func=add_watchlist_item,
-                name="add_watchlist_item",
-                description="Propose adding an A-share security to monitoring. This is a write action requiring approval.",
-                args_schema=AddWatchlistInput,
-            ),
-            StructuredTool.from_function(
-                func=update_watchlist_item,
-                name="update_watchlist_item",
-                description="Propose updating a watchlist item. This is a write action requiring approval.",
-                args_schema=UpdateWatchlistInput,
-            ),
-            StructuredTool.from_function(
-                func=delete_watchlist_item,
-                name="delete_watchlist_item",
-                description="Propose deleting a watchlist item. This is a write action requiring approval.",
-                args_schema=DeleteWatchlistInput,
-            ),
-            StructuredTool.from_function(
-                func=submit_monitor_run,
-                name="submit_monitor_run",
-                description="Propose submitting a monitoring run for the enabled watchlist. This requires approval.",
-                args_schema=SubmitMonitorInput,
-            ),
-            StructuredTool.from_function(
-                func=get_monitor_status,
-                name="get_monitor_status",
-                description="Read monitor run status by run id.",
-                args_schema=MonitorLookupInput,
-            ),
-            StructuredTool.from_function(
-                func=list_monitor_reports,
-                name="list_monitor_reports",
-                description="List recent monitor reports, optionally filtered by symbol.",
-            ),
-            StructuredTool.from_function(
-                func=get_monitor_report,
-                name="get_monitor_report",
-                description="Read one monitor report by id.",
             ),
         ]
 
 
 def _dump(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
-
-
-def _public_monitor_report(report) -> dict[str, Any]:
-    payload = report.model_dump(mode="json")
-    if not settings.INVESTMENT_MONITOR_RECOMMENDATIONS_ENABLED:
-        payload["recommendation_5d"] = None
-        payload["recommendation_20d"] = None
-        payload["model_metadata"] = {
-            **dict(payload.get("model_metadata") or {}),
-            "shadow_mode": True,
-        }
-    return payload
-

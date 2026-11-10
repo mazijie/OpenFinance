@@ -1,4 +1,4 @@
-"""Gold-market feature snapshots used by the monitoring workflow."""
+"""Gold-market feature snapshots for market analysis."""
 
 from __future__ import annotations
 

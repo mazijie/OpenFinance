@@ -672,15 +672,6 @@ class HarnessGraph:
                     "summary": _summarize_tool_result(summary),
                 },
             )
-            if tool_name == "submit_monitor_run" and summary.get("run_id"):
-                self._emit(
-                    "monitor.queued",
-                    {
-                        "run_id": summary.get("run_id"),
-                        "thread_id": self.thread_id,
-                        "status": summary.get("status"),
-                    },
-                )
             return ToolMessage(content=content, tool_call_id=call_id, name=tool_name)
         except Exception as exc:
             self.store.record_tool_call(
@@ -934,13 +925,5 @@ def _model_failure_answer(
 
 
 def _action_summary(tool_name: str, args: dict[str, Any]) -> str:
-    if tool_name == "add_watchlist_item":
-        return f"将 {args.get('symbol')} 加入监护清单"
-    if tool_name == "update_watchlist_item":
-        return f"更新 {args.get('symbol')} 的监护设置"
-    if tool_name == "delete_watchlist_item":
-        return f"从监护清单移除 {args.get('symbol')}"
-    if tool_name == "submit_monitor_run":
-        return "提交一次收盘后投研监测任务"
     return f"执行 {tool_name}"
 

@@ -18,6 +18,8 @@ def build_source_text(record: NewsArticleRecord) -> str | None:
 
     parts = [record.title.strip(), (record.summary or "").strip(), (record.content or "").strip()]
     combined = "\n\n".join(part for part in parts if part)
+    if record.provider == "caixin" and record.summary and not record.content:
+        return f"标题：{record.title.strip()}\n摘要：{record.summary.strip()}"
     if len(combined) < settings.RAG_MIN_TEXT_LENGTH:
         return None
     return combined

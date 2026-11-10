@@ -13,7 +13,7 @@ def test_agent_uses_cutoff_and_does_not_present_stale_price(monkeypatch):
     monkeypatch.setattr("backend.harness.tools.RealtimeQuoteService", Service)
     context = ToolContext(thread_id="t", turn_id="r", run_kind="interactive", as_of=cutoff,
                           store=object(), evidence_service=object(), web_service=object())
-    tools = ToolRegistry(context=context, watchlist_service=object(), monitor_store=object(), finance_service=object()).tool_map
+    tools = ToolRegistry(context=context, finance_service=object()).tool_map
     response = json.loads(tools["realtime_quote"].invoke({"symbol": "600519.SH"}))
     assert calls == [("600519.SH", cutoff)]
     assert response["message"] == "没有更新"
@@ -30,7 +30,7 @@ def test_agent_returns_citable_fresh_quote(monkeypatch):
     monkeypatch.setattr("backend.harness.tools.RealtimeQuoteService", Service)
     context = ToolContext(thread_id="t", turn_id="r", run_kind="interactive", as_of=instant,
                           store=object(), evidence_service=object(), web_service=object())
-    tools = ToolRegistry(context=context, watchlist_service=object(), monitor_store=object(), finance_service=object()).tool_map
+    tools = ToolRegistry(context=context, finance_service=object()).tool_map
     result = json.loads(tools["realtime_quote"].invoke({"symbol": "600519"}))
     assert result["documents"][0]["source_type"] == "market"
     assert "1234.5" in result["documents"][0]["text"]
