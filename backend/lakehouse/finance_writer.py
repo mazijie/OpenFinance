@@ -282,7 +282,7 @@ class FinanceWriter:
 
         rows = (
             self.security_master_table.scan()
-            .select("symbol", "name", "exchange", "provider", "ingested_at")
+            .select("symbol", "name", "exchange", "ingested_at")
             .to_arrow()
             .to_pylist()
         )
@@ -291,7 +291,7 @@ class FinanceWriter:
             exchange = str(row["exchange"]).upper()
             symbol = str(row["symbol"]).upper().split(".")[0]
             key = (symbol, exchange)
-            rank = (row.get("provider") == "tencent", str(row.get("ingested_at") or ""), str(row.get("name") or ""))
+            rank = (str(row.get("ingested_at") or ""), str(row.get("name") or ""))
             if key not in selected or rank > selected[key][0]:
                 selected[key] = (rank, {"symbol": symbol, "name": str(row["name"]), "exchange": exchange})
         return [item for _, item in selected.values()]

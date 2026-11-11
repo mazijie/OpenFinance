@@ -102,3 +102,141 @@ scan times including planning of 26.1 ms and 22.9 ms respectively. Candidate
 file size is not a measurement of bytes actually transferred. This small,
 single-partition test does not establish the effect on full-table manifests or
 concurrent API latency; evaluate those before production maintenance.
+
+## Full snapshot layout experiment
+
+`scripts/benchmark_market_layout.py` runs the history API in a separate backend
+process against one pinned table snapshot. It records endpoint, file planning,
+and Arrow read durations, candidate file sizes, bar hashes, and any separate
+availability check as JSON Lines. This is an in-process HTTP client, not a
+browser or network benchmark. Cache state is uncontrolled; candidate file sizes
+are not actual bytes transferred. By default availability is checked once per
+symbol and period when the production index does not match the candidate.
+`scripts/report_market_layout.py` summarizes samples and checks result hashes;
+use at least ten iterations per symbol and period.
+
+Example after creating and validating candidates (replace identifiers and paths):
+
+```sh
+docker exec openfinance-backend python -m scripts.benchmark_market_layout \
+  --table bench_example.sorted --snapshot 12345 --iterations 10 \
+  --output /app/output/example/sorted.jsonl
+python scripts/report_market_layout.py output/example/*.jsonl
+```
+
+`scripts/run_market_layout_read_matrix.py` accepts a prepared experiment result
+directory and runs three symbol streams concurrently. Those independent client
+processes have separate in-process query gates; the resulting timings are not a
+measurement of production's single-worker queue. Its append and compaction
+counterparts can wait for the previous stage's validated report.
+
+Use a new `bench_<dataset>` namespace and retain the source snapshot throughout
+the experiment. `backend.maintenance.clone_market_manifest_benchmark` registers
+a metadata-isolated clone with its own UUID and metadata location. The clone's
+old manifests and all its data files **are shared with the source snapshot**;
+only `rewrite-manifests` is permitted. Never purge it, expire its snapshots, or
+run data-file rewrites on it. The clone disables Iceberg garbage collection.
+`scripts/compare_market_manifest_files.py` verifies the exact source and target
+immutable file references and rejects delete files. It does not protect against
+an external process deleting or modifying those shared objects.
+
+`spark/benchmark/market_layout_experiment.py` creates independent tables from the
+pinned source snapshot with monthly, 16-bucket, or 32-bucket layouts; its sort
+action rewrites only the independent table named `sorted`. Compare each candidate
+against the original snapshot with `exceptAll` in both directions. Spark CTAS may
+relax field nullability; record this difference and preserve the original schema
+in any production implementation.
+
+After recording read benchmarks, `scripts/simulate_market_layout_append.py`
+copies a real source day's rows to a clearly synthetic future date and appends
+them to each independent candidate using the production PyIceberg append function.
+The default batch of 200 models ten normalization inputs of 20 stocks each; it
+does not measure upsert/version checks or locking. The candidate snapshot changes,
+so record its pre-append snapshot and run this only after comparisons and reads.
+The script refuses the shared-file manifest clone and the production namespace.
+
+The experiment's `compact-day` action applies bin-packing to the entire month
+containing the synthetic day, with a minimum input-file threshold. It pins the
+pre-compaction candidate snapshot and compares the month's rows before and after
+the rewrite. `scripts/run_market_layout_compaction_matrix.py` runs this only after
+the append simulation. It is a benchmark; choosing a threshold and rollout
+requires the measured file growth and latency.
+
+The separate `openfinance_market_history_compaction` Airflow DAG is created
+paused. When enabled, it rewrites eligible files for the current and preceding
+calendar months weekly, sorting by `symbol, trading_date`, then requests a
+refresh of the snapshot-specific history index. The index builder skips its run
+if another rebuild holds its lock; concurrent later commits can also make the
+index stale again. Its initial file-count trigger is eight input files and
+target size is 128 MiB; Iceberg can also select files for size or delete-file
+criteria. These are starting settings, not validated optima. It
+uses Iceberg's atomic rewrite and conflict validation; it does not hold the
+project-wide writer lock while Spark runs. A concurrent conflicting update can
+therefore cause the task to fail and retry. A successful rewrite changes the
+snapshot, and history queries fall back until the index is refreshed. Historical
+months outside the rolling window need a separately bounded invocation of
+`spark/jobs/compact_market_history.py`.
+
+Daily ingestion still fetches small API batches to Bronze, then groups up to
+`A_SHARE_NORMALIZATION_BATCH_SIZE` objects (default 300) for each Silver
+normalization job. Backfill waits for the collected Bronze paths and groups up
+to `A_SHARE_BACKFILL_NORMALIZATION_BATCH_SIZE` objects (default 5), including
+successful partial-recovery objects. Both limits bound the number of objects,
+not their bytes or rows; normalization holds each batch's records in memory.
+The daily writer may commit new and changed records separately, so one job is
+not necessarily one Iceberg snapshot.
+
+The benchmark Spark actions reject destinations outside an isolated `bench_` namespace.
+Run preparation and timed reads separately to avoid concurrent Spark work
+distorting measurements; preserve per-action JSON and logs in `output/` or
+`.cache/`. The Spark submitter must explicitly allocate executor cores and
+memory; changing `SPARK_WORKER_CORES` and `SPARK_WORKER_MEMORY` only changes the
+worker's available capacity. Do not treat a successful benchmark as permission
+to rewrite or replace the production table.
+
+## November 10, 2026 isolated comparison
+
+The source snapshot contained 17,054,786 rows, 97,606 data files and 558
+manifests. The manifest-only clone kept exactly the same data files and reduced
+the manifests to nine. Independent candidate tables compared equal to the
+source for all rows, but their Spark-created Iceberg schemas changed required
+fields to optional, so they are not suitable for production replacement.
+
+The test ran the actual history API in three concurrent independent processes
+for three symbols, three periods and ten requests per group. The table below
+shows the median across the 30 observations for each period, not single-client
+latency. Candidate availability lookups used a fallback because the index did
+not match their snapshots. File-size figures are sums of selected file sizes,
+not measured network bytes. Shared server load and cache also affect results.
+
+| Layout | Daily median | Weekly median | Monthly median | Daily selected file size |
+| --- | ---: | ---: | ---: | ---: |
+| Source | 14.90 s | 15.74 s | 15.60 s | 0.29 MiB |
+| Manifests only | 0.89 s | 2.24 s | 4.26 s | 0.29 MiB |
+| Month, sorted | 0.18 s | 0.36 s | 0.53 s | 37.72 MiB |
+| 16 symbol buckets | 1.22 s | 1.48 s | 1.58 s | 2.65 MiB |
+| 32 symbol buckets | 2.31 s | 2.37 s | 2.56 s | 1.48 MiB |
+
+The 16- and 32-bucket candidates initially had 14,475 and 28,367 files,
+respectively. A synthetic day with 5,570 records split into 28 appends of up to
+200 records added 30 files to the sorted monthly table, 475 to 16 buckets and
+936 to 32 buckets. This measures the append function, not the full ingestion
+pipeline, version lookups or retries. Compaction with a minimum of eight input
+files rewrote 28 to 2, 443 to 32, and 872 to 64 files, respectively; the
+synthetic month's 5,570 rows were identical before and after in every case.
+Some files stayed below the rewrite threshold. A separate single-batch append
+smoke test generated three files for monthly partitions and 48 for 16 buckets.
+The daily pipeline now attempts to group up to 300 Bronze objects, so the
+200-record simulation models the earlier smaller-batch setting, not its current
+usual commit size. Full results and logs are in `output/market_layout_20261110`.
+
+On November 10 the production table's manifests were rewritten in place, from
+558 to nine, holding the shared Iceberg writer lock. The table UUID and complete
+Iceberg schema were unchanged. A before/after snapshot comparison verified the
+same 97,606 immutable data-file paths, sizes and record counts and no delete
+files. The history-index state was retargeted only after this equality check,
+retaining its validity window. No production data files were compacted by this
+operation. Three sequential requests for `000001.SZ` against the live backend
+afterward took approximately 1.05–1.27 seconds daily, 2.39–2.75 seconds weekly
+and 4.23–4.92 seconds monthly; this is a small live sample, not the same load as
+the concurrent benchmark above.

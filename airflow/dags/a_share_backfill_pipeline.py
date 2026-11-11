@@ -10,7 +10,7 @@ from airflow.decorators import dag, task
 from airflow.exceptions import AirflowSkipException
 from airflow.operators.python import get_current_context
 
-from a_share_pipeline_helpers import _get_a_share_symbols, _submit_a_share_ingestion, _submit_finance_normalization, _wait_for_a_share_ingestion, _wait_for_finance_normalization, _post_internal_job, build_universe_plan, recover_partial_a_share_ingestion
+from a_share_pipeline_helpers import _get_a_share_symbols, _submit_a_share_ingestion, _submit_finance_normalization, _wait_for_a_share_ingestion, _wait_for_finance_normalization, _post_internal_job, build_normalization_batches, build_universe_plan, recover_partial_a_share_ingestion
 
 
 @dag(dag_id="openfinance_a_share_backfill_pipeline", description="Manually backfill all current ordinary A-share daily bars.", schedule=None, start_date=pendulum.datetime(2026, 8, 3, tz="UTC"), catchup=False, max_active_runs=1, default_args={"owner": "openfinance", "retries": 0}, tags=["openfinance", "a-share", "market-data", "backfill"])
@@ -52,8 +52,11 @@ def a_share_backfill_pipeline():
         return result
 
     @task
-    def normalize(result: dict[str, object]) -> dict[str, int]:
-        paths = result.get("object_paths") or [str(result["object_path"])]
+    def build_normalization_jobs(results: list[dict[str, object]]) -> list[list[str]]:
+        return build_normalization_batches(results, int(os.getenv("A_SHARE_BACKFILL_NORMALIZATION_BATCH_SIZE", "5")))
+
+    @task
+    def normalize(paths: list[str]) -> dict[str, int]:
         return _wait_for_finance_normalization(_submit_finance_normalization({"object_paths": paths}))  # type: ignore[return-value]
 
     @task
@@ -61,9 +64,10 @@ def a_share_backfill_pipeline():
         failed_symbols = [symbol for result in ingest_results for symbol in result.get("failed_symbols", [])]
         no_data_symbols = [symbol for result in ingest_results for symbol in result.get("no_data_symbols", [])]
         expected = len(plan["batches"])
-        if len(ingest_results) != expected or len(silver_stats) != expected:
+        if len(ingest_results) != expected:
             raise ValueError("A-share batch results are incomplete; coverage will not be recorded")
-        if any(int(stat.get("processed_objects", 0)) != len(result.get("object_paths") or [result["object_path"]]) or int(stat.get("failed_count", 0)) for result, stat in zip(ingest_results, silver_stats, strict=True)):
+        expected_objects = sum(len(result.get("object_paths") or [result["object_path"]]) for result in ingest_results)
+        if sum(int(stat.get("processed_objects", 0)) for stat in silver_stats) != expected_objects or any(int(stat.get("failed_count", 0)) for stat in silver_stats):
             raise ValueError("A-share normalization did not process every Bronze object")
         summary = {"symbol_count": sum(int(item.get("symbol_count", 0)) for item in ingest_results), "daily_bar_count": sum(int(item.get("daily_bar_count", 0)) for item in ingest_results), "processed_batches": len(ingest_results), "failed_batches": sum(bool(item.get("failed_symbols")) for item in ingest_results), "written_daily_bars": sum(int(item.get("written_daily_bars", 0)) for item in silver_stats), "filtered_count": sum(int(item.get("filtered_count", 0)) for item in silver_stats), "duplicate_count": sum(int(item.get("duplicate_count", 0)) for item in silver_stats)}
         if not summary["processed_batches"] or not summary["daily_bar_count"] or not (summary["written_daily_bars"] + summary["duplicate_count"]):
@@ -78,7 +82,7 @@ def a_share_backfill_pipeline():
     window = build_window()
     plan = build_batches(window)
     results = ingest.expand_kwargs(build_ingest_jobs(plan, window))
-    silver_stats = normalize.expand(result=results)
+    silver_stats = normalize.expand(paths=build_normalization_jobs(results))
     quality_check(plan, window, results, silver_stats)
 
 

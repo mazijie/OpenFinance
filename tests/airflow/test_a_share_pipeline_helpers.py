@@ -185,6 +185,17 @@ def test_build_normalization_batches_rejects_missing_object_path() -> None:
         )
 
 
+def test_build_normalization_batches_includes_backfill_recovery_objects() -> None:
+    module = _load_helpers_module()
+    results = [
+        {"object_path": "original", "object_paths": ["original", "recovered"]},
+        {"object_path": "next"},
+    ]
+    assert module.build_normalization_batches(results, 2) == [["original", "recovered"], ["next"]]
+    with pytest.raises(ValueError, match="unique Bronze object"):
+        module.build_normalization_batches(results + [{"object_path": "original"}], 2)
+
+
 def test_normalization_status_poll_retries_connection_error(monkeypatch) -> None:
     module = _load_helpers_module()
     calls = 0

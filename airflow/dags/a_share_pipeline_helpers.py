@@ -274,13 +274,16 @@ def build_normalization_batches(
 
     if batch_size <= 0:
         raise ValueError("A_SHARE_NORMALIZATION_BATCH_SIZE must be positive")
-    paths = [
-        str(item["object_path"])
-        for item in ingest_results
-        if str(item.get("object_path") or "").strip()
-    ]
+    paths = []
+    for item in ingest_results:
+        object_paths = item.get("object_paths") or [item.get("object_path")]
+        if not isinstance(object_paths, list) or not object_paths or any(
+            not str(path or "").strip() for path in object_paths
+        ):
+            raise ValueError("Every successful ingestion batch must have one unique Bronze object or more")
+        paths.extend(str(path).strip() for path in object_paths)
     unique_paths = list(dict.fromkeys(paths))
-    if len(unique_paths) != len(ingest_results):
+    if len(unique_paths) != len(paths):
         raise ValueError("Every successful ingestion batch must have one unique Bronze object")
     return [
         unique_paths[index:index + batch_size]
