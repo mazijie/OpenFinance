@@ -22,10 +22,10 @@ class FinanceRepository:
         self._security_options_expires_at = 0.0
         self._security_options_lock = threading.Lock()
 
-    def search_market(self, params: MarketQueryParams, *, table=None, snapshot_id=None) -> list[MarketSummary]:
+    def search_market(self, params: MarketQueryParams, *, table=None, snapshot_id=None, daily_reader=None) -> list[MarketSummary]:
         """Return summarized market data for one symbol or security."""
 
-        visible_bars = self._resolve_visible_bars(params, table=table, snapshot_id=snapshot_id)
+        visible_bars = self._resolve_visible_bars(params, table=table, snapshot_id=snapshot_id, daily_reader=daily_reader)
         grouped: dict[tuple[str, str, str], list[DailyBarRecord]] = defaultdict(list)
         for bar in visible_bars:
             grouped[(bar.security_id, bar.symbol, bar.exchange)].append(bar)
@@ -79,9 +79,9 @@ class FinanceRepository:
             if row.exchange.upper() in {"SH", "SZ", "BJ"}
         )
 
-    def _resolve_visible_bars(self, params: MarketQueryParams, *, table=None, snapshot_id=None) -> list[DailyBarRecord]:
+    def _resolve_visible_bars(self, params: MarketQueryParams, *, table=None, snapshot_id=None, daily_reader=None) -> list[DailyBarRecord]:
         as_of = params.as_of or datetime.now(UTC)
-        scan = getattr(self.writer, "scan_daily_bars_for_query", None)
+        scan = getattr(daily_reader or self.writer, "scan_daily_bars_for_query", None)
         if callable(scan):
             kwargs = dict(
                 symbol=params.symbol,

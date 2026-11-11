@@ -5,7 +5,7 @@
 实时行情和 Airflow 已包含在默认 Compose 服务中。使用已有的 `.env`，以下命令在项目根目录执行：
 
 ```bash
-docker compose up -d --build
+bash scripts/compose.sh up -d --build
 docker compose logs -f quote-collector quote-consumer flink-submit
 ```
 

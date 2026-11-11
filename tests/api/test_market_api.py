@@ -145,6 +145,44 @@ def test_history_pages_align_to_period_and_preserve_empty_gap(monkeypatch) -> No
         app.dependency_overrides.clear()
 
 
+def test_starrocks_is_selected_for_all_history_periods_and_unavailable_returns_503(monkeypatch):
+    from backend.lakehouse.starrocks_daily_reader import StarRocksDailyReader, StarRocksUnavailable
+
+    service = FakeFinanceService(MarketSearchResult(items=[]))
+    monkeypatch.setattr("backend.api.market.settings.MARKET_DAILY_READER", "starrocks")
+    monkeypatch.setattr("backend.api.market.has_earlier", lambda **kwargs: False)
+    app.dependency_overrides[get_finance_service] = lambda: service
+    try:
+        client = TestClient(app)
+        for period in ("daily", "weekly", "monthly"):
+            assert client.get("/api/market/history", params={"symbol": "600519.SH", "period": period}).status_code == 200
+            assert isinstance(service.calls[-1]["daily_reader"], StarRocksDailyReader)
+        monkeypatch.setattr("backend.api.market.has_earlier", lambda **kwargs: None)
+        calls = []
+        service.has_history_before = lambda *args, **kwargs: calls.append(kwargs) or True
+        for period in ("daily", "weekly", "monthly"):
+            response = client.get("/api/market/history/availability", params={
+                "symbol": "600519.SH", "before": "2026-01-01", "period": period,
+                "snapshot_id": "1234567890123456789",
+                "table_uuid": "00000000-0000-0000-0000-000000000001",
+                "query_time": "2026-01-02T00:00:00Z",
+            })
+            assert response.status_code == 200 and response.json()["has_more"] is True
+            assert isinstance(calls[-1]["daily_reader"], StarRocksDailyReader)
+            assert calls[-1]["snapshot_id"] == 1234567890123456789
+        monkeypatch.setattr("backend.api.market.settings.MARKET_DAILY_READER", "iceberg")
+        assert client.get("/api/market/history", params={"symbol": "600519.SH", "period": "monthly"}).status_code == 200
+        assert "daily_reader" not in service.calls[-1]
+        monkeypatch.setattr("backend.api.market.settings.MARKET_DAILY_READER", "starrocks")
+        def fail(**kwargs):
+            raise StarRocksUnavailable("StarRocks daily history query failed")
+        service.search_market = fail
+        response = client.get("/api/market/history", params={"symbol": "600519.SH"})
+        assert response.status_code == 503
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_history_returns_pending_and_checks_same_snapshot(monkeypatch) -> None:
     service = FakeFinanceService(MarketSearchResult(items=[_summary()]))
     calls = []

@@ -1,5 +1,0 @@
-# Enable Python traceback output if the normalization worker segfaults.
-services:
-  normalization-worker:
-    environment:
-      PYTHONFAULTHANDLER: "1"

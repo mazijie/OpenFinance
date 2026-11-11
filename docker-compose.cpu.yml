@@ -1,8 +1,0 @@
-# CPU deployment: docker compose -f docker-compose.yml -f docker-compose.cpu.yml up -d --build
-# Requires Docker Compose v2.24.0+ for !reset.
-services:
-
-  embedding:
-    gpus: !reset []
-    environment:
-      OLLAMA_NUM_PARALLEL: "1"

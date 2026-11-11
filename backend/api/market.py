@@ -14,6 +14,8 @@ from backend.services.finance_service import FinanceService
 from backend.services.market_query_gate import market_query_gate
 from backend.lakehouse.market_history_index import has_earlier
 from backend.logging_utils import get_logger
+from backend.config import settings
+from backend.lakehouse.starrocks_daily_reader import StarRocksDailyReader, StarRocksUnavailable
 
 router = APIRouter(prefix="/api/market", tags=["market"])
 logger = get_logger(__name__)
@@ -66,9 +68,10 @@ def market_history(
             snapshot = table.current_snapshot()
             snapshot_id = snapshot.snapshot_id if snapshot else None
             table_uuid = str(table.metadata.table_uuid)
+            reader_options = {"daily_reader": StarRocksDailyReader()} if settings.MARKET_DAILY_READER == "starrocks" else {}
             result = finance_service.search_market(symbol=symbol, start_date=start, end_date=end,
                                                    adjustment_type=adjustment_type, as_of=now,
-                                                   table=table, snapshot_id=snapshot_id)
+                                                   table=table, snapshot_id=snapshot_id, **reader_options)
         query_seconds = monotonic() - started
         has_more = False if snapshot_id is None else has_earlier(
             table_uuid=table_uuid, snapshot_id=snapshot_id, as_of=now,
@@ -82,6 +85,8 @@ def market_history(
                 "next_before": start, "has_more": has_more,
                 "snapshot_id": str(snapshot_id) if snapshot_id is not None else None,
                 "table_uuid": table_uuid, "query_time": now}
+    except StarRocksUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except TimeoutError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
@@ -96,6 +101,7 @@ def history_availability(
     snapshot_id: int = Query(),
     table_uuid: str = Query(min_length=1, max_length=36),
     query_time: datetime = Query(),
+    period: Literal["daily", "weekly", "monthly"] = "daily",
     finance_service: FinanceService = Depends(get_finance_service),
 ):
     now = datetime.now(UTC)
@@ -111,9 +117,10 @@ def history_availability(
                              symbol=symbol, adjustment_type=adjustment_type, before=before)
         if answer is None:
             with market_query_gate.acquire(page=False):
+                reader_options = {"daily_reader": StarRocksDailyReader()} if settings.MARKET_DAILY_READER == "starrocks" else {}
                 answer = finance_service.has_history_before(symbol, adjustment_type, before, query_time,
-                                                             table=table, snapshot_id=snapshot_id)
-            source = "iceberg"
+                                                             table=table, snapshot_id=snapshot_id, **reader_options)
+            source = "starrocks" if reader_options else "iceberg"
         else:
             source = "index"
         logger.info("Market history availability checked", event="market_history_availability_checked",
@@ -121,6 +128,8 @@ def history_availability(
         return {"has_more": answer}
     except HTTPException:
         raise
+    except StarRocksUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except TimeoutError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:

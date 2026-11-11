@@ -1,4 +1,89 @@
+x-embedding: &embedding
+  image: ${LOCAL_EMBEDDING_IMAGE:-docker.1ms.run/ollama/ollama:latest}
+  container_name: openfinance-embedding
+  restart: unless-stopped
+  runtime: ${OPENFINANCE_OLLAMA_RUNTIME:-runc}
+  environment:
+    OLLAMA_HOST: 0.0.0.0:11434
+    OLLAMA_KEEP_ALIVE: "-1"
+    OLLAMA_MAX_LOADED_MODELS: "1"
+    OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-1}
+    NVIDIA_VISIBLE_DEVICES: all
+    NVIDIA_DRIVER_CAPABILITIES: compute,utility
+  ports:
+    - "127.0.0.1:8001:11434"
+  volumes:
+    - embedding_data:/root/.ollama
+  networks:
+    default:
+      aliases: [embedding]
+  healthcheck:
+    test: ["CMD", "ollama", "list"]
+    interval: 10s
+    timeout: 5s
+    retries: 30
+    start_period: 20s
+
 services:
+  # The query service is started with the stack; credentials are initialized explicitly.
+  starrocks:
+    image: starrocks/allin1-ubuntu:3.5.21
+    hostname: starrocks
+    mem_limit: ${STARROCKS_MEMORY_LIMIT:-8g}
+    cpus: ${STARROCKS_CPUS:-4}
+    ports:
+      - "127.0.0.1:${STARROCKS_LOCAL_PORT:-19030}:9030"
+    volumes:
+      - starrocks_fe_meta:/data/deploy/starrocks/fe/meta
+      - starrocks_be_storage:/data/deploy/starrocks/be/storage
+    restart: unless-stopped
+
+  starrocks-postgres-init:
+    profiles: ["starrocks-init"]
+    image: pgvector/pgvector:pg16
+    env_file: [.env]
+    environment:
+      PGHOST: postgres
+      PGDATABASE: openfinance
+      PGUSER: openfinance
+      PGPASSWORD: openfinance
+    volumes:
+      - ./deploy/starrocks/init-postgres.sh:/init.sh:ro
+    entrypoint: ["bash", "/init.sh"]
+    restart: "no"
+
+  starrocks-minio-init:
+    profiles: ["starrocks-init"]
+    image: minio/mc:latest
+    env_file: [.env]
+    environment:
+      STARROCKS_MINIO_ADMIN_USER: ${STARROCKS_MINIO_ADMIN_USER:-minioadmin}
+      STARROCKS_MINIO_ADMIN_PASSWORD: ${STARROCKS_MINIO_ADMIN_PASSWORD:-minioadmin}
+      STARROCKS_WAREHOUSE_BUCKET: ${MINIO_WAREHOUSE_BUCKET:-openfinance-warehouse}
+    volumes:
+      - ./deploy/starrocks/init-minio.sh:/init.sh:ro
+    entrypoint: ["/bin/sh", "/init.sh"]
+    restart: "no"
+
+  starrocks-catalog-init:
+    profiles: ["starrocks-init"]
+    image: openfinance-backend:latest
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql://openfinance:openfinance@postgres:5432/openfinance
+      MINIO_ENDPOINT: minio:9000
+      ICEBERG_CATALOG_URI: postgresql+psycopg://openfinance:openfinance@postgres:5432/openfinance
+      STARROCKS_HOST: starrocks
+      STARROCKS_PORT: 9030
+      STARROCKS_ICEBERG_JDBC_URI: jdbc:postgresql://postgres:5432/openfinance?currentSchema=openfinance
+      STARROCKS_ICEBERG_JDBC_USER: openfinance_starrocks_ro
+      STARROCKS_S3_ENDPOINT: http://minio:9000
+      STARROCKS_S3_ACCESS_KEY: openfinance_sr_ro
+    volumes:
+      - .:/app
+    command: ["python", "-m", "backend.maintenance.setup_starrocks_catalog"]
+    restart: "no"
+
   spark-events-init:
     image: ${SPARK_LEARNING_IMAGE:-openfinance-spark-learning:4.1.2-iceberg1.12}
     build:
@@ -70,9 +155,9 @@ services:
       - org.apache.spark.deploy.worker.Worker
       - spark://spark-master:7077
       - --cores
-      - "2"
+      - ${SPARK_WORKER_CORES:-2}
       - --memory
-      - 2g
+      - ${SPARK_WORKER_MEMORY:-2g}
     ports:
       - "8082:8081"
     volumes:
@@ -97,6 +182,7 @@ services:
       - ./spark/conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
 
   backend:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: backend/Dockerfile
@@ -115,6 +201,8 @@ services:
     env_file:
       - .env
     environment:
+      STARROCKS_HOST: ${STARROCKS_CONTAINER_HOST:-starrocks}
+      STARROCKS_PORT: 9030
       DATABASE_URL: postgresql://openfinance:openfinance@postgres:5432/openfinance
       MINIO_ENDPOINT: minio:9000
       ICEBERG_CATALOG_URI: postgresql+psycopg://openfinance:openfinance@postgres:5432/openfinance
@@ -186,6 +274,8 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     restart: unless-stopped
+    deploy:
+      replicas: ${A_SHARE_INGEST_WORKERS:-1}
     depends_on:
       postgres:
         condition: service_healthy
@@ -205,25 +295,7 @@ services:
     command: ["python", "-m", "backend.workers.a_share_ingestion_worker"]
 
   embedding:
-    image: ${LOCAL_EMBEDDING_IMAGE:-docker.1ms.run/ollama/ollama:latest}
-    container_name: openfinance-embedding
-    restart: unless-stopped
-    gpus: all
-    environment:
-      OLLAMA_HOST: 0.0.0.0:11434
-      OLLAMA_KEEP_ALIVE: "-1"
-      OLLAMA_MAX_LOADED_MODELS: "1"
-      OLLAMA_NUM_PARALLEL: "2"
-    ports:
-      - "127.0.0.1:8001:11434"
-    volumes:
-      - embedding_data:/root/.ollama
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
-      start_period: 20s
+    <<: *embedding
 
   embedding-init:
     image: ${LOCAL_EMBEDDING_IMAGE:-docker.1ms.run/ollama/ollama:latest}
@@ -251,6 +323,7 @@ services:
     env_file:
       - .env
     environment:
+      PYTHONFAULTHANDLER: ${NORMALIZATION_PYTHONFAULTHANDLER:-0}
       DATABASE_URL: postgresql://openfinance:openfinance@postgres:5432/openfinance
       MINIO_ENDPOINT: minio:9000
       ICEBERG_CATALOG_URI: postgresql+psycopg://openfinance:openfinance@postgres:5432/openfinance
@@ -260,6 +333,7 @@ services:
     command: ["python", "-m", "backend.workers.finance_normalization_worker"]
 
   postgres:
+    restart: unless-stopped
     image: pgvector/pgvector:pg16
     container_name: openfinance-postgres
     environment:
@@ -320,6 +394,7 @@ services:
     restart: "no"
 
   opensearch:
+    restart: unless-stopped
     image: opensearchproject/opensearch:2.19.1
     container_name: openfinance-opensearch
     environment:
@@ -338,6 +413,7 @@ services:
       retries: 10
 
   minio:
+    restart: unless-stopped
     image: minio/minio:latest
     container_name: openfinance-minio
     command: server /data --console-address ":9001"
@@ -425,6 +501,7 @@ services:
     restart: "no"
 
   airflow-webserver:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: airflow/Dockerfile
@@ -464,6 +541,7 @@ services:
     command: webserver
 
   airflow-scheduler:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: airflow/Dockerfile
@@ -502,6 +580,7 @@ services:
     command: scheduler
 
   kafka:
+    restart: unless-stopped
     image: ${REALTIME_KAFKA_IMAGE:-docker.1ms.run/apache/kafka:3.9.1}
     environment:
       KAFKA_NODE_ID: 1
@@ -525,6 +604,7 @@ services:
       timeout: 5s
       retries: 30
   flink-jobmanager:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: realtime/Dockerfile.flink
@@ -548,6 +628,7 @@ services:
     entrypoint: ["/bin/sh", "-c", "chown flink:flink /opt/flink/checkpoints"]
     volumes: ["realtime_checkpoints:/opt/flink/checkpoints"]
   flink-taskmanager:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: realtime/Dockerfile.flink
@@ -613,6 +694,8 @@ services:
     restart: unless-stopped
 
 volumes:
+  starrocks_fe_meta:
+  starrocks_be_storage:
   realtime_kafka:
   realtime_checkpoints:
   postgres_data:

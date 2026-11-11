@@ -1,2 +1,0 @@
-# Compatibility overlay: realtime services are included in docker-compose.yml.
-services: {}

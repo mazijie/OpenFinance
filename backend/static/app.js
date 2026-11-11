@@ -747,7 +747,7 @@ async function loadHistoryPage(requestId, older) {
     if (!older) state.lastReconcileAt = Date.now();
     renderHistoryChart(viewport);
     state.historyAvailability = payload.has_more === null ? {
-      symbol: state.historySymbol, before: payload.next_before, snapshot_id: payload.snapshot_id,
+      symbol: state.historySymbol, period: state.marketPeriod, before: payload.next_before, snapshot_id: payload.snapshot_id,
       table_uuid: payload.table_uuid, query_time: payload.query_time,
       initialEmpty: !older && !summary,
     } : null;
@@ -784,7 +784,7 @@ async function checkHistoryAvailability(requestId, context) {
   const timeout = setTimeout(abort, 60000);
   try {
     const params = new URLSearchParams({ symbol: context.symbol, before: context.before,
-      adjustment_type: MARKET_ADJUSTMENT, snapshot_id: context.snapshot_id,
+      adjustment_type: MARKET_ADJUSTMENT, period: context.period, snapshot_id: context.snapshot_id,
       table_uuid: context.table_uuid, query_time: context.query_time });
     const response = await fetch(`/api/market/history/availability?${params}`, { signal: controller.signal });
     if (!response.ok) {

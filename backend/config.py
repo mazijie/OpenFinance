@@ -63,6 +63,15 @@ class Settings(BaseSettings):
     ICEBERG_GOLD_METRICS_TABLE: str = "gold_security_daily_metrics"
     ICEBERG_S3_PATH_STYLE_ACCESS: bool = True
 
+    MARKET_DAILY_READER: Literal["iceberg", "starrocks"] = "iceberg"
+    STARROCKS_HOST: str = "localhost"
+    STARROCKS_PORT: int = 9030
+    STARROCKS_USER: str = "openfinance_reader"
+    STARROCKS_PASSWORD: str = ""
+    STARROCKS_CATALOG: str = "openfinance"
+    STARROCKS_CONNECT_TIMEOUT_SECONDS: int = Field(default=5, gt=0)
+    STARROCKS_QUERY_TIMEOUT_SECONDS: int = Field(default=45, gt=0)
+
     # Daily history is independent of BaoStock security metadata and calendars.
     FINANCE_DAILY_PROVIDER: Literal["tencent"] = "tencent"
     TENCENT_CONNECT_TIMEOUT_SECONDS: float = Field(default=5.0, gt=0)

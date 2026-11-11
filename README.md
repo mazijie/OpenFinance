@@ -19,7 +19,7 @@ The research agent can search approved public websites when internal sources do 
 ### Requirements
 
 - Docker Engine or Docker Desktop with the Docker Compose v2 plugin.
-- A host and Docker runtime that support the GPU access requested by the default local Ollama embedding service. If your environment does not support GPU passthrough, adapt the embedding service configuration before starting the stack.
+- Docker Compose and sufficient resources for local Ollama embeddings. The startup script selects NVIDIA GPU mode when both a GPU and Docker's NVIDIA runtime are available, otherwise CPU mode.
 - For chat, a DeepSeek API key entered in the web UI’s model settings. The key is sent with requests and is not stored in `.env`.
 
 ### Quick start
@@ -35,8 +35,8 @@ Review `.env` before deployment. Replace the example values for the internal API
 Build and start the default single-host stack:
 
 ```bash
-docker compose up -d --build
-docker compose ps
+bash scripts/compose.sh up -d --build
+bash scripts/compose.sh ps
 ```
 
 The default stack includes the backend, PostgreSQL, MinIO, OpenSearch, local Ollama embeddings, workers, Spark, Airflow, and the real-time quote pipeline. The backend runs `alembic upgrade head` before starting the API. Ollama downloads the configured embedding model during initialization, so the first startup may take a while and use significant disk space.

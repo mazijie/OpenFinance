@@ -24,7 +24,7 @@ sudo docker exec openfinance-postgres psql -U openfinance -d openfinance -c "SEL
 
 ```bash
 date -Is
-sudo docker compose -f docker-compose.yml -f docker-compose.cpu.yml -f docker-compose.debug.yml up -d --no-deps --force-recreate normalization-worker
+sudo NORMALIZATION_PYTHONFAULTHANDLER=1 bash scripts/compose.sh up -d --no-deps --force-recreate normalization-worker
 ```
 
 重启会中断当前批次；旧任务心跳超时后才能被重新领取，默认阈值为 600 秒。避免清除或重复提交 Airflow 任务。Airflow 的等待超时包含排队时间，默认 6 小时。

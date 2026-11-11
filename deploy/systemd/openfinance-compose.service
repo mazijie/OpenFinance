@@ -1,0 +1,19 @@
+[Unit]
+Description=Recover the OpenFinance Compose stack after boot
+Requires=snap.docker.dockerd.service
+After=snap.docker.dockerd.service network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/mzj/OpenFinance
+Environment=PATH=/snap/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/bin/bash /home/mzj/OpenFinance/scripts/compose.sh up -d --no-build --pull never
+Restart=on-failure
+RestartSec=30
+TimeoutStartSec=infinity
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
