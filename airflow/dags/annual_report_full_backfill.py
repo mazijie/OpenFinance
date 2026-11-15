@@ -99,10 +99,7 @@ def annual_report_full_backfill():
                 continue
             exchange = "SH" if org_id.startswith("gssh") else "SZ" if org_id.startswith("gssz") else "BJ" if org_id.startswith("gfbj") else ""
             if exchange:
-                stock = f"{code}.{exchange}"
-                if exchange == "BJ":
-                    stock = f"{stock}:{org_id}"
-                stocks.append(stock)
+                stocks.append(f"{code}.{exchange}:{org_id}")
         stocks = sorted(set(stocks))
         if not stocks:
             raise ValueError("CNInfo returned no active A-share securities")

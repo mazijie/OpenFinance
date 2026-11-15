@@ -20,11 +20,13 @@ class CNInfoCollector:
     """Client for the public CNInfo announcement query endpoint."""
 
     QUERY_URL = "https://www.cninfo.com.cn/new/hisAnnouncement/query"
+    SECURITY_MASTER_URL = "https://www.cninfo.com.cn/new/data/szse_stock.json"
     CATEGORY = "category_ndbg_szsh"
 
     def __init__(self, client: httpx.Client | None = None) -> None:
         self.client = client or httpx.Client(timeout=settings.NEWS_HTTP_TIMEOUT_SECONDS)
         self._owns_client = client is None
+        self._security_org_ids: dict[str, set[str]] | None = None
 
     def close(self) -> None:
         if self._owns_client:
@@ -38,14 +40,12 @@ class CNInfoCollector:
         page_size: int = 30,
     ) -> list[AnnualReportAnnouncement]:
         code, exchange, explicit_org_id = self._normalize_stock(stock_code)
-        column = {"SH": "sse", "SZ": "szse", "BJ": "bj"}[exchange]
-        org_id = self._org_id(code, exchange, explicit_org_id)
+        org_id = explicit_org_id or self._org_id(code)
         params = {
             "stock": f"{code},{org_id}",
             "tabName": "fulltext",
             "pageNum": 1,
             "pageSize": page_size,
-            "column": column,
             "category": self.CATEGORY,
             "plate": "",
             "searchkey": "",
@@ -145,15 +145,33 @@ class CNInfoCollector:
     def _is_full_report(title: str) -> bool:
         return "摘要" not in title and "英文版" not in title and "英文" not in title
 
-    @staticmethod
-    def _org_id(code: str, exchange: str, explicit_org_id: str | None = None) -> str:
-        if explicit_org_id:
-            return explicit_org_id
-        if exchange == "SH":
-            return f"gssh0{code}"
-        if exchange == "SZ":
-            return f"gssz{code}"
-        raise CNInfoCollectorError("BJ orgId requires a security-master mapping; use CODE.BJ:ORG_ID")
+    def _org_id(self, code: str) -> str:
+        """Resolve CNInfo's opaque organization ID instead of deriving it from a symbol."""
+        if self._security_org_ids is None:
+            try:
+                response = self.client.get(
+                    self.SECURITY_MASTER_URL,
+                    headers={"User-Agent": settings.CNINFO_USER_AGENT, "Referer": "https://www.cninfo.com.cn/"},
+                )
+                response.raise_for_status()
+                payload = response.json()
+            except (httpx.HTTPError, ValueError) as exc:
+                raise CNInfoCollectorError(f"CNInfo security master query failed: {exc}") from exc
+            if not isinstance(payload, dict) or not isinstance(payload.get("stockList"), list):
+                raise CNInfoCollectorError("CNInfo returned an invalid security master")
+            org_ids: dict[str, set[str]] = {}
+            for row in payload["stockList"]:
+                if not isinstance(row, dict) or row.get("category") != "A股":
+                    continue
+                symbol = str(row.get("code") or "").strip()
+                org_id = str(row.get("orgId") or "").strip()
+                if symbol and org_id:
+                    org_ids.setdefault(symbol, set()).add(org_id)
+            self._security_org_ids = org_ids
+        matches = self._security_org_ids.get(code, set())
+        if len(matches) != 1:
+            raise CNInfoCollectorError(f"CNInfo security master has {len(matches)} organization IDs for {code}")
+        return next(iter(matches))
 
     @staticmethod
     def _normalize_stock(stock_code: str) -> tuple[str, str, str | None]:
