@@ -5,9 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content="查看 A 股行情、财经新闻和公司年报" />
     <title>OpenFinance</title>
-    <link rel="stylesheet" href="/static/styles.css?v=copy-refresh-1" />
+    <link rel="stylesheet" href="/static/styles.css?v=workspace-3" />
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js" defer></script>
-    <script src="/static/app.js?v=copy-refresh-1" defer></script>
+    <script src="/static/app.js?v=workspace-3" defer></script>
+    <script src="/static/market-gold.js?v=workspace-4" defer></script>
   </head>
   <body>
     <header class="topbar">
@@ -21,19 +22,21 @@
       <div class="topbar-right">
         <nav class="page-nav" aria-label="主导航">
           <button class="nav-button active" type="button" data-page="marketPage" aria-current="page">行情与问答</button>
-          <button class="nav-button" type="button" data-page="researchPage">新闻与年报</button>
+          <button class="nav-button" type="button" data-page="researchPage">财经新闻</button>
+          <button class="nav-button" type="button" data-page="reportsPage">公司年报</button>
+          <a class="nav-link" href="/ops">数据运维</a>
         </nav>
-        <div class="topbar-status"><span class="status-light"></span><span id="systemStatus">数据服务就绪</span></div>
       </div>
     </header>
 
     <main class="workspace">
       <section class="page-view active" id="marketPage" aria-label="行情与问答">
+      <section class="market-overview-card panel" aria-label="市场概览">
+        <div class="overview-heading"><p class="eyebrow">MARKET PULSE</p><h2>市场概览</h2></div>
+        <div class="overview-content"><div id="realtimeIndices" class="index-grid" aria-label="主要指数"></div>
+        <div id="realtimeMarketOverview" class="market-breadth" role="status" aria-live="polite">涨跌数据加载中…</div></div>
+      </section>
       <section class="market-panel panel" aria-label="A 股行情">
-        <section class="market-overview-card" aria-label="市场概览">
-          <div id="realtimeIndices" class="index-grid" aria-label="主要指数"></div>
-          <div id="realtimeMarketOverview" class="market-breadth" role="status" aria-live="polite">涨跌数据加载中…</div>
-        </section>
         <div class="section-heading">
           <div>
             <p class="eyebrow">MARKET OVERVIEW</p>
@@ -57,13 +60,28 @@
           <div class="history-footer"><span id="historyStatus" role="status" aria-live="polite"></span><button id="loadOlderButton" class="secondary-button" type="button" hidden>加载更早行情</button></div>
         </div>
 
+        <details class="research-disclosure" id="goldScreen"><summary>全市场行情筛选</summary>
+          <form id="goldScreenForm" class="screen-query">
+            <label>交易日 <input type="date" name="trading_date" /></label>
+            <label>排序 <select name="sort_by"><option value="return_1d">1 日收益</option><option value="return_5d">5 日收益</option><option value="return_20d">20 日收益</option><option value="amount">成交额</option><option value="avg_amount_5d">5 日平均成交额</option><option value="avg_amount_20d">20 日平均成交额</option><option value="ma_5d">5 日均价</option><option value="ma_20d">20 日均价</option><option value="price_ma_5d_deviation">5 日均线偏离</option><option value="price_ma_20d_deviation">20 日均线偏离</option><option value="volatility_20d_annualized">20 日年化波动率</option><option value="avg_volume_5d">5 日平均成交量</option><option value="volume_ratio_5d">成交量比</option></select></label>
+            <label>方向 <select name="direction"><option value="desc">从高到低</option><option value="asc">从低到高</option></select></label>
+            <label>最小值 <input type="number" step="any" name="min_value" placeholder="不限" /></label>
+            <label>最大值 <input type="number" step="any" name="max_value" placeholder="不限" /></label>
+            <button type="submit" class="secondary-button">查询</button>
+          </form>
+          <small>收益、偏离率和波动率的筛选值使用小数，例如 0.05 表示 5%；成交量比使用倍数。</small>
+          <div id="goldScreenResult" role="status">展开后查询。</div>
+        </details>
+
+
 
       </section>
 
+        <div class="research-sidebar">
         <section class="chat-panel panel" aria-label="智能问答">
           <div class="section-heading">
             <div><p class="eyebrow">RESEARCH AGENT</p><h2>智能问答</h2></div>
-            <div class="heading-actions"><span class="status-pill" id="chatStatus">就绪</span><button class="icon-button" type="button" id="newChatThreadButton" title="新建对话">＋</button></div>
+            <div class="heading-actions"><span class="status-pill" id="chatStatus">就绪</span><button class="icon-button" type="button" id="newChatThreadButton" title="新建对话" aria-label="新建对话">＋</button></div>
           </div>
           <div class="chat-thread-strip">
             <div class="chat-thread-tabs" id="chatThreadTabs" role="tablist" aria-label="聊天记录"></div>
@@ -90,18 +108,32 @@
           <div class="messages" id="messages" aria-live="polite"><article class="message assistant"><div class="bubble">你好！你可以问我股票行情、财经新闻和公司年报相关的问题。例如：贵州茅台最近一个月的行情如何？</div></article></div>
           <form class="chat-form" id="chatForm"><textarea id="questionInput" name="question" rows="3" placeholder="例如：600519.SH 最近一个月涨跌如何？" required></textarea><button class="primary-button" type="submit" id="sendButton">发送</button></form>
         </section>
-
+        <div class="quick-panels">
+          <section class="quick-panel panel" aria-labelledby="quickNewsHeading">
+            <div class="quick-heading"><div><p class="eyebrow">LATEST NEWS</p><h2 id="quickNewsHeading">最新财经新闻</h2></div><button type="button" class="quick-link" id="openNewsPage">查看全部 <span aria-hidden="true">→</span></button></div>
+            <div id="quickNews" class="quick-list" aria-live="polite">正在加载新闻…</div>
+          </section>
+          <section class="quick-panel panel" aria-labelledby="quickReportsHeading">
+            <div class="quick-heading"><div><p class="eyebrow">ANNUAL REPORTS</p><h2 id="quickReportsHeading">所选股票年报</h2></div><button type="button" class="quick-link" id="openReportsPage">查看全部 <span aria-hidden="true">→</span></button></div>
+            <p id="quickReportsSymbol" class="quick-context">请选择证券</p>
+            <div id="quickReports" class="quick-list" aria-live="polite">选择证券后查看年报。</div>
+          </section>
+        </div>
+        </div>
       </section>
 
-      <section class="page-view research-page" id="researchPage" aria-label="新闻与年报" hidden>
+      <section class="page-view research-page" id="researchPage" aria-label="新闻与年报：财经新闻" hidden>
         <section class="news-panel panel" aria-label="财经新闻">
-          <div class="section-heading"><div><p class="eyebrow">MARKET NEWS</p><h2>财经新闻</h2></div><button class="icon-button" type="button" id="refreshNewsButton" title="刷新新闻">↻</button></div>
+          <div class="section-heading"><div><p class="eyebrow">MARKET NEWS</p><h2>财经新闻</h2></div><button class="icon-button" type="button" id="refreshNewsButton" title="刷新新闻" aria-label="刷新新闻">↻</button></div>
           <div class="news-meta"><span id="newsSummary">加载中…</span><label>每页<select id="pageSizeSelect"><option value="10">10</option><option value="20" selected>20</option><option value="50">50</option></select></label></div>
           <div class="news-list" id="newsList"></div>
           <footer class="pager"><button class="secondary-button" type="button" id="prevPageButton">上一页</button><span id="pageInfo">第 1 页</span><button class="secondary-button" type="button" id="nextPageButton">下一页</button></footer>
         </section>
+      </section>
+
+      <section class="page-view research-page" id="reportsPage" aria-label="公司年报" hidden>
         <section class="reports-panel panel" aria-label="公司年报">
-          <div class="section-heading"><div><p class="eyebrow">ANNUAL REPORTS</p><h2>公司年报</h2></div><button class="icon-button" type="button" id="refreshReportsButton" title="刷新年报">↻</button></div>
+          <div class="section-heading"><div><p class="eyebrow">ANNUAL REPORTS</p><h2>公司年报</h2></div><button class="icon-button" type="button" id="refreshReportsButton" title="刷新年报" aria-label="刷新年报">↻</button></div>
           <form class="report-filters" id="reportFilterForm">
             <label class="field">证券代码<input id="reportStockCode" name="stock_code" maxlength="16" placeholder="全部证券" /></label>
             <label class="field">报告年度<select id="reportYear" name="report_year"><option value="">全部年度</option></select></label>

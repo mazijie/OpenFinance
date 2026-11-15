@@ -3,7 +3,6 @@ const questionInput = document.querySelector("#questionInput");
 const sendButton = document.querySelector("#sendButton");
 const messages = document.querySelector("#messages");
 const chatStatus = document.querySelector("#chatStatus");
-const systemStatus = document.querySelector("#systemStatus");
 const chatThreadTabs = document.querySelector("#chatThreadTabs");
 const newChatThreadButton = document.querySelector("#newChatThreadButton");
 let chatProgress = null;
@@ -122,16 +121,18 @@ async function loadSecurityOptions() {
     securitySearch.disabled = false;
     securitySearch.placeholder = items.length ? "输入股票名称或代码" : "暂无可用证券";
     symbolInput.innerHTML = items.length
-      ? items.map((item) => `<option value="${escapeHtml(item.symbol)}" data-exchange="${escapeHtml(item.exchange)}">${escapeHtml(item.symbol)} · ${escapeHtml(item.name)} · ${escapeHtml(item.exchange)}</option>`).join("")
+      ? items.map((item) => `<option value="${escapeHtml(item.symbol)}" data-exchange="${escapeHtml(item.exchange)}">${escapeHtml(item.symbol)} · ${escapeHtml(item.name)}</option>`).join("")
       : '<option value="" selected disabled>暂无可用证券</option>';
     if (items.some((item) => item.symbol === "600519.SH")) symbolInput.value = "600519.SH";
     if (items.length) securitySearch.value = `${items[symbolInput.selectedIndex].name} · ${items[symbolInput.selectedIndex].symbol}`;
     if (items.length && marketForm.checkValidity()) loadMarket();
     if (items.length) loadRealtimeQuotes();
+    loadQuickReports();
   } catch (error) {
     console.warn(error.message || "证券列表加载失败");
     symbolInput.innerHTML = '<option value="" selected disabled>证券列表加载失败</option>';
     securitySearch.placeholder = "证券列表加载失败";
+    document.querySelector("#quickReports").textContent = "证券列表加载失败，请稍后重试。";
   }
 }
 
@@ -630,7 +631,7 @@ async function loadIntraday() {
     if (!series.length) { chartEmpty.hidden = false; chartEmpty.textContent = "暂无交易时段内的分时数据"; return; }
     const previousClose = intradayPreviousClose(state.liveQuote?.previous_close);
     const firstPoint = series.find((point) => point.time);
-    chartSubtitle.textContent = `${formatRealtimeTime(firstPoint.time).split(' ')[0]} · 分时走势${points.some((point) => point.incomplete) ? " · 部分数据待更新" : ""}`;
+    chartSubtitle.textContent = `${formatRealtimeTime(firstPoint.time).split(' ')[0]} · 分时走势${points.some((point) => point.incomplete) ? " · 部分行情数据不完整" : ""}`;
     state.chart.setOption({ animation: false, tooltip: { trigger: "axis", formatter: (params) => {
       const item = params.find((entry) => entry.data?.time);
       if (!item) return "";
@@ -658,7 +659,7 @@ function intradaySeries(points) {
     if (x == null || point.price == null) continue;
     const previous = result.at(-1);
     if (previous?.time && x - previous.value[0] > 1 + 1e-6) result.push({ value: [x, null], time: null });
-    result.push({ value: [x, Number(point.price)], time: point.time });
+    result.push({ value: [x, Number(point.price)], time: point.time, source: point.source });
   }
   return result;
 }
@@ -1420,6 +1421,42 @@ function formatNewsExcerpt(item, maxLength = 180) {
   return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text;
 }
 
+function renderQuickNews(items) {
+  const container = document.querySelector("#quickNews");
+  if (!items.length) { container.textContent = "暂无最新新闻。"; return; }
+  container.innerHTML = items.slice(0, 3).map((item) => {
+    const title = escapeHtml(item.title || "未命名新闻");
+    const url = /^https?:\/\//i.test(item.url || "") ? item.url : "";
+    const heading = url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${title}</a>` : title;
+    return `<article class="quick-item"><div class="quick-item-title">${heading}</div><small>${escapeHtml(item.source_name || item.provider || "未知来源")} · ${escapeHtml(formatDateTime(item.published_at))}</small></article>`;
+  }).join("");
+}
+
+let quickReportsRequestId = 0;
+async function loadQuickReports() {
+  const id = ++quickReportsRequestId;
+  const symbol = symbolInput.value;
+  const container = document.querySelector("#quickReports");
+  const context = document.querySelector("#quickReportsSymbol");
+  const item = state.securities.find((security) => security.symbol === symbol);
+  context.textContent = item ? `${item.name} · ${symbol}` : "请选择证券";
+  if (!symbol) { container.textContent = "选择证券后查看年报。"; return; }
+  container.textContent = "正在加载年报…";
+  try {
+    // Annual-report records store the six-digit code without the exchange suffix.
+    const stockCode = symbol.split(".")[0];
+    const params = new URLSearchParams({ stock_code: stockCode, page: "1", page_size: "3" });
+    const response = await fetch(`/api/reports?${params}`);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error("年报加载失败，请稍后重试。");
+    if (id !== quickReportsRequestId) return;
+    const reports = payload.items || [];
+    container.innerHTML = reports.length ? reports.map((report) => `<article class="quick-item"><div class="quick-item-title"><a href="/api/reports/${encodeURIComponent(report.report_id)}/download" target="_blank" rel="noopener noreferrer">${escapeHtml(report.title)}</a></div><small>${escapeHtml(String(report.report_year))} 年报 · ${escapeHtml(formatDateTime(report.announcement_time))}</small></article>`).join("") : '<p class="quick-empty">暂无该证券的年报。</p>';
+  } catch (error) {
+    if (id === quickReportsRequestId) container.textContent = "年报加载失败，请稍后重试。";
+  }
+}
+
 function renderNewsItems(items) {
   if (!items.length) { newsList.innerHTML = '<div class="empty-state">当前暂无可展示的新闻。</div>'; return; }
   newsList.innerHTML = items.map((item) => {
@@ -1438,6 +1475,7 @@ async function loadNews() {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.detail || `新闻加载失败（${response.status}）`);
     renderNewsItems(payload.items || []);
+    if (state.newsPage === 1) renderQuickNews(payload.items || []);
     newsSummary.textContent = `共 ${payload.total || 0} 条新闻`;
     pageInfo.textContent = `第 ${payload.page || state.newsPage} / ${payload.total_pages || 1} 页`;
     prevPageButton.disabled = (payload.page || state.newsPage) <= 1;
@@ -1445,6 +1483,7 @@ async function loadNews() {
   } catch (error) {
     newsList.innerHTML = `<div class="empty-state">${escapeHtml(error.message || "新闻加载失败")}</div>`;
     newsSummary.textContent = "加载失败";
+    if (state.newsPage === 1) document.querySelector("#quickNews").textContent = "新闻加载失败，请稍后重试。";
     nextPageButton.disabled = true;
   } finally { refreshNewsButton.disabled = false; }
 }
@@ -1506,10 +1545,22 @@ pageNavButtons.forEach((button) => {
       if (active) item.setAttribute("aria-current", "page");
       else item.removeAttribute("aria-current");
     });
-    if (pageId === "researchPage") loadReports();
+    if (pageId === "reportsPage") loadReports();
     if (pageId === "agentPage" && !state.agentThreadId) loadAgentThreads();
     requestAnimationFrame(() => state.chart?.resize());
   });
+});
+
+document.querySelector("#openNewsPage").addEventListener("click", () => {
+  document.querySelector('[data-page="researchPage"]').click();
+  window.scrollTo(0, 0);
+});
+document.querySelector("#openReportsPage").addEventListener("click", () => {
+  reportStockCode.value = symbolInput.value.split(".")[0];
+  reportYear.value = "";
+  state.reportPage = 1;
+  document.querySelector('[data-page="reportsPage"]').click();
+  window.scrollTo(0, 0);
 });
 
 newAgentThreadButton?.addEventListener("click", async () => {
@@ -1658,7 +1709,7 @@ function showSecurityResults(query) {
   const all = state.securities.map((item, index) => ({ item, index })).filter(({ item }) => `${item.symbol} ${item.name} ${item.exchange}`.toLocaleLowerCase().includes(text));
   securityMatches = all;
   securityActive = 0;
-  securityResults.innerHTML = all.map(({ item, index }, position) => `<div class="security-option" role="option" id="security-option-${position}" data-index="${index}" aria-selected="${position === 0}"><span>${escapeHtml(item.name)}</span><small>${escapeHtml(item.symbol)} · ${escapeHtml(item.exchange)}</small></div>`).join("") + (!all.length ? '<div class="security-results-note">未找到证券</div>' : "");
+  securityResults.innerHTML = all.map(({ item, index }, position) => `<div class="security-option" role="option" id="security-option-${position}" data-index="${index}" aria-selected="${position === 0}"><span>${escapeHtml(item.name)}</span><small>${escapeHtml(item.symbol)}</small></div>`).join("") + (!all.length ? '<div class="security-results-note">未找到证券</div>' : "");
   securityResults.hidden = false;
   securitySearch.setAttribute("aria-expanded", "true");
   if (securityMatches.length) securitySearch.setAttribute("aria-activedescendant", "security-option-0");
@@ -1677,6 +1728,7 @@ securitySearch.addEventListener("click", () => { if (securityResults.hidden) sho
 securitySearch.addEventListener("blur", closeSecurityResults);
 securitySearch.addEventListener("input", () => {
   symbolInput.selectedIndex = -1;
+  loadQuickReports();
   showSecurityResults(securitySearch.value);
   ++state.marketRequestId;
   ++state.intradayRequestId;
@@ -1722,6 +1774,7 @@ document.addEventListener("click", (event) => { if (!event.target.closest(".secu
 marketForm.addEventListener("change", (event) => {
   if (event.target.matches("select")) loadMarket();
   if (event.target === symbolInput) {
+    loadQuickReports();
     clearStockPrice();
     stockPriceTime.textContent = "正在获取行情";
     clearStockMetrics();
@@ -1752,6 +1805,7 @@ pageSizeSelect.addEventListener("change", () => { state.newsPage = 1; state.news
 prevPageButton.addEventListener("click", () => { if (state.newsPage > 1) { state.newsPage -= 1; loadNews(); } });
 nextPageButton.addEventListener("click", () => { state.newsPage += 1; loadNews(); });
 window.addEventListener("resize", () => state.chart?.resize());
+if (window.ResizeObserver) new ResizeObserver(() => state.chart?.resize()).observe(marketChart);
 
 let realtimeRequestId = 0;
 let realtimeAbortController = null;
