@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content="查看 A 股行情、财经新闻和公司年报" />
     <title>OpenFinance</title>
-    <link rel="stylesheet" href="/static/styles.css?v=workspace-3" />
+    <link rel="stylesheet" href="/static/styles.css?v=workspace-21" />
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js" defer></script>
-    <script src="/static/app.js?v=workspace-3" defer></script>
-    <script src="/static/market-gold.js?v=workspace-4" defer></script>
+    <script src="/static/app.js?v=workspace-8" defer></script>
+    <script src="/static/market-gold.js?v=workspace-9" defer></script>
   </head>
   <body>
     <header class="topbar">
@@ -36,49 +36,94 @@
         <div class="overview-content"><div id="realtimeIndices" class="index-grid" aria-label="主要指数"></div>
         <div id="realtimeMarketOverview" class="market-breadth" role="status" aria-live="polite">涨跌数据加载中…</div></div>
       </section>
+      <div class="market-column">
       <section class="market-panel panel" aria-label="A 股行情">
         <div class="section-heading">
           <div>
             <p class="eyebrow">MARKET OVERVIEW</p>
-            <h2>个股行情</h2>
+            <h2>股票行情</h2>
           </div>
           <span class="data-badge" id="marketSourceBadge">等待查询</span>
         </div>
 
+        <div class="stock-workspace">
+          <div class="stock-detail">
         <form class="market-query" id="marketForm">
           <div class="field field-symbol"><label for="securitySearch">证券</label><div class="security-picker"><input id="securitySearch" type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="securityResults" placeholder="正在加载证券列表…" autocomplete="off" disabled /><div id="securityResults" class="security-results" role="listbox" aria-label="证券搜索结果" hidden></div></div><select id="symbolInput" name="symbol" tabindex="-1" aria-hidden="true" required hidden><option value="" selected disabled>正在加载证券列表…</option></select></div>
         </form>
 
         <div class="market-message" id="marketMessage" role="status">选择证券后查看行情。</div>
-        <div class="stock-price" aria-live="polite"><span>最新成交价</span><strong id="stockLastPrice">—</strong><strong id="stockChangePercent" class="stock-change"></strong><span class="stock-previous">昨收 <b id="stockPreviousClose">—</b></span><small id="stockPriceTime">等待行情</small></div>
-        <div class="stock-metrics" aria-live="polite"><div><span>成交量</span><strong id="stockVolume">—</strong></div><div><span>总市值</span><strong id="stockMarketCap">—</strong></div><div><span>市盈率</span><strong id="stockPe">—</strong></div></div>
+        <section class="gold-metrics" aria-labelledby="goldMetricsHeading">
+          <div class="gold-metrics-heading"><h3 id="goldMetricsHeading">行情指标</h3><span id="goldMetricsStatus" role="status" aria-live="polite">选择证券后加载</span></div>
+          <div class="stock-price" aria-live="polite"><span>最新成交价</span><strong id="stockLastPrice">—</strong><strong id="stockChangePercent" class="stock-change"></strong><span class="stock-previous">昨收 <b id="stockPreviousClose">—</b></span><small id="stockPriceTime">等待行情</small></div>
+          <div class="gold-metrics-grid" id="goldMetricsGrid" aria-live="polite">
+            <div><span>成交量</span><strong id="stockVolume">—</strong></div>
+            <div><span>总市值</span><strong id="stockMarketCap">—</strong></div>
+            <div><span>市盈率</span><strong id="stockPe">—</strong></div>
+            <div><span>1 日收益</span><strong data-gold="return_1d">—</strong></div>
+            <div><span>5 日收益</span><strong data-gold="return_5d">—</strong></div>
+            <div><span>20 日收益</span><strong data-gold="return_20d">—</strong></div>
+            <div><span>20 日年化波动</span><strong data-gold="volatility_20d_annualized">—</strong></div>
+            <div><span>5 日均价</span><strong data-gold="ma_5d">—</strong></div>
+            <div><span>20 日均价</span><strong data-gold="ma_20d">—</strong></div>
+            <div><span>5 日均线偏离</span><strong data-gold="price_ma_5d_deviation">—</strong></div>
+            <div><span>20 日均线偏离</span><strong data-gold="price_ma_20d_deviation">—</strong></div>
+            <div><span>5 日平均成交额</span><strong data-gold="avg_amount_5d">—</strong></div>
+            <div><span>20 日平均成交额</span><strong data-gold="avg_amount_20d">—</strong></div>
+            <div><span>5 日平均成交量</span><strong data-gold="avg_volume_5d">—</strong></div>
+            <div><span>成交量比</span><strong data-gold="volume_ratio_5d">—</strong></div>
+          </div>
+          <p class="gold-metrics-note">基于最近可用日线；收益、均线和波动按最近行情记录计算。</p>
+        </section>
 
+          </div>
         <div class="chart-card">
           <div class="chart-heading"><div><div class="period-tabs" role="tablist" aria-label="行情周期"><button type="button" role="tab" data-period="intraday" aria-selected="false">分时</button><button type="button" role="tab" data-period="daily" aria-selected="true" class="active">日线</button><button type="button" role="tab" data-period="weekly" aria-selected="false">周线</button><button type="button" role="tab" data-period="monthly" aria-selected="false">月线</button></div><p id="chartSubtitle">暂无数据</p></div><span class="chart-legend"><i class="legend-up"></i>上涨 <i class="legend-down"></i>下跌</span></div>
           <div class="chart-wrap" id="marketChart" aria-label="日线 K 线图"></div>
           <div class="chart-empty" id="chartEmpty">暂无行情数据</div>
           <div class="history-footer"><span id="historyStatus" role="status" aria-live="polite"></span><button id="loadOlderButton" class="secondary-button" type="button" hidden>加载更早行情</button></div>
         </div>
+        </div>
 
-        <details class="research-disclosure" id="goldScreen"><summary>全市场行情筛选</summary>
-          <form id="goldScreenForm" class="screen-query">
-            <label>交易日 <input type="date" name="trading_date" /></label>
-            <label>排序 <select name="sort_by"><option value="return_1d">1 日收益</option><option value="return_5d">5 日收益</option><option value="return_20d">20 日收益</option><option value="amount">成交额</option><option value="avg_amount_5d">5 日平均成交额</option><option value="avg_amount_20d">20 日平均成交额</option><option value="ma_5d">5 日均价</option><option value="ma_20d">20 日均价</option><option value="price_ma_5d_deviation">5 日均线偏离</option><option value="price_ma_20d_deviation">20 日均线偏离</option><option value="volatility_20d_annualized">20 日年化波动率</option><option value="avg_volume_5d">5 日平均成交量</option><option value="volume_ratio_5d">成交量比</option></select></label>
-            <label>方向 <select name="direction"><option value="desc">从高到低</option><option value="asc">从低到高</option></select></label>
-            <label>最小值 <input type="number" step="any" name="min_value" placeholder="不限" /></label>
-            <label>最大值 <input type="number" step="any" name="max_value" placeholder="不限" /></label>
-            <button type="submit" class="secondary-button">查询</button>
-          </form>
-          <small>收益、偏离率和波动率的筛选值使用小数，例如 0.05 表示 5%；成交量比使用倍数。</small>
-          <div id="goldScreenResult" role="status">展开后查询。</div>
-        </details>
+
 
 
 
       </section>
 
-        <div class="research-sidebar">
-        <section class="chat-panel panel" aria-label="智能问答">
+      <section class="market-ranking panel" id="goldScreen" aria-labelledby="marketRankingHeading">
+          <div class="ranking-header"><h2 id="marketRankingHeading">区间收益排行</h2><span id="goldScreenDate" role="status">正在加载…</span></div>
+          <div class="ranking-controls">
+          <div class="ranking-tabs" role="tablist" aria-label="排行周期">
+            <button type="button" role="tab" data-ranking-period="day" class="active" aria-selected="true">当日</button>
+            <button type="button" role="tab" data-ranking-period="five_days" aria-selected="false">五日</button>
+            <button type="button" role="tab" data-ranking-period="month" aria-selected="false">月</button>
+            <button type="button" role="tab" data-ranking-period="year" aria-selected="false">年</button>
+          </div>
+          <div class="ranking-sides" role="group" aria-label="收益方向">
+            <button type="button" data-ranking-side="positive" class="active" aria-pressed="true">正收益前 20</button>
+            <button type="button" data-ranking-side="negative" aria-pressed="false">负收益前 20</button>
+          </div>
+          </div>
+          <div class="ranking-list" id="goldScreenResult" role="region" aria-label="区间收益排行" aria-live="polite">正在加载排行…</div>
+          <p class="ranking-note" id="goldScreenNote">按收益从高到低排列</p>
+        </section>
+
+      </div>
+      <div class="research-column">
+      <div class="quick-panels">
+          <section class="quick-panel panel" aria-labelledby="quickNewsHeading">
+            <div class="quick-heading"><div><p class="eyebrow">LATEST NEWS</p><h2 id="quickNewsHeading">最新财经新闻</h2></div><button type="button" class="quick-link" id="openNewsPage">查看全部 <span aria-hidden="true">→</span></button></div>
+            <div id="quickNews" class="quick-list" aria-live="polite">正在加载新闻…</div>
+          </section>
+          <section class="quick-panel panel" aria-labelledby="quickReportsHeading">
+            <div class="quick-heading"><div><p class="eyebrow">ANNUAL REPORTS</p><h2 id="quickReportsHeading">所选股票年报</h2></div><button type="button" class="quick-link" id="openReportsPage">查看全部 <span aria-hidden="true">→</span></button></div>
+            <p id="quickReportsSymbol" class="quick-context">请选择证券</p>
+            <div id="quickReports" class="quick-list" aria-live="polite">选择证券后查看年报。</div>
+          </section>
+        </div>
+
+      <section class="chat-panel panel" aria-label="智能问答">
           <div class="section-heading">
             <div><p class="eyebrow">RESEARCH AGENT</p><h2>智能问答</h2></div>
             <div class="heading-actions"><span class="status-pill" id="chatStatus">就绪</span><button class="icon-button" type="button" id="newChatThreadButton" title="新建对话" aria-label="新建对话">＋</button></div>
@@ -108,18 +153,8 @@
           <div class="messages" id="messages" aria-live="polite"><article class="message assistant"><div class="bubble">你好！你可以问我股票行情、财经新闻和公司年报相关的问题。例如：贵州茅台最近一个月的行情如何？</div></article></div>
           <form class="chat-form" id="chatForm"><textarea id="questionInput" name="question" rows="3" placeholder="例如：600519.SH 最近一个月涨跌如何？" required></textarea><button class="primary-button" type="submit" id="sendButton">发送</button></form>
         </section>
-        <div class="quick-panels">
-          <section class="quick-panel panel" aria-labelledby="quickNewsHeading">
-            <div class="quick-heading"><div><p class="eyebrow">LATEST NEWS</p><h2 id="quickNewsHeading">最新财经新闻</h2></div><button type="button" class="quick-link" id="openNewsPage">查看全部 <span aria-hidden="true">→</span></button></div>
-            <div id="quickNews" class="quick-list" aria-live="polite">正在加载新闻…</div>
-          </section>
-          <section class="quick-panel panel" aria-labelledby="quickReportsHeading">
-            <div class="quick-heading"><div><p class="eyebrow">ANNUAL REPORTS</p><h2 id="quickReportsHeading">所选股票年报</h2></div><button type="button" class="quick-link" id="openReportsPage">查看全部 <span aria-hidden="true">→</span></button></div>
-            <p id="quickReportsSymbol" class="quick-context">请选择证券</p>
-            <div id="quickReports" class="quick-list" aria-live="polite">选择证券后查看年报。</div>
-          </section>
-        </div>
-        </div>
+
+      </div>
       </section>
 
       <section class="page-view research-page" id="researchPage" aria-label="新闻与年报：财经新闻" hidden>
