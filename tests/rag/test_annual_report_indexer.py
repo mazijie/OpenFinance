@@ -70,6 +70,27 @@ def test_only_current_ok_pages_are_indexed_and_lexical_retry_is_repaired():
     assert result['written_lexical_chunks'] == 1
 
 
+def test_failed_source_read_does_not_clear_existing_indexes():
+    import pytest
+
+    class FailedWriter(Writer):
+        def scan_chunks(self):
+            raise RuntimeError("source unavailable")
+
+    class ExistingStore(Store):
+        def clear(self):
+            raise AssertionError("must not clear before source read")
+
+    class ExistingLexical(Lexical):
+        def clear(self):
+            raise AssertionError("must not clear before source read")
+
+    indexer = AnnualReportRAGIndexer(writer=FailedWriter(), store=ExistingStore(),
+                                     lexical_store=ExistingLexical(), embedding_service=Embeddings())
+    with pytest.raises(RuntimeError, match="source unavailable"):
+        indexer.run(rebuild_all=True)
+
+
 def test_vector_search_binds_embedding_before_filter_parameters():
     class Cursor:
         def __enter__(self):

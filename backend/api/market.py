@@ -14,7 +14,6 @@ from backend.services.finance_service import FinanceService
 from backend.services.market_query_gate import market_query_gate
 from backend.lakehouse.market_history_index import has_earlier
 from backend.logging_utils import get_logger
-from backend.config import settings
 from backend.lakehouse.starrocks_daily_reader import StarRocksDailyReader, StarRocksUnavailable
 
 router = APIRouter(prefix="/api/market", tags=["market"])
@@ -68,7 +67,7 @@ def market_history(
             snapshot = table.current_snapshot()
             snapshot_id = snapshot.snapshot_id if snapshot else None
             table_uuid = str(table.metadata.table_uuid)
-            reader_options = {"daily_reader": StarRocksDailyReader()} if settings.MARKET_DAILY_READER == "starrocks" else {}
+            reader_options = {"daily_reader": StarRocksDailyReader()}
             result = finance_service.search_market(symbol=symbol, start_date=start, end_date=end,
                                                    adjustment_type=adjustment_type, as_of=now,
                                                    table=table, snapshot_id=snapshot_id, **reader_options)
@@ -117,10 +116,10 @@ def history_availability(
                              symbol=symbol, adjustment_type=adjustment_type, before=before)
         if answer is None:
             with market_query_gate.acquire(page=False):
-                reader_options = {"daily_reader": StarRocksDailyReader()} if settings.MARKET_DAILY_READER == "starrocks" else {}
+                reader_options = {"daily_reader": StarRocksDailyReader()}
                 answer = finance_service.has_history_before(symbol, adjustment_type, before, query_time,
                                                              table=table, snapshot_id=snapshot_id, **reader_options)
-            source = "starrocks" if reader_options else "iceberg"
+            source = "starrocks"
         else:
             source = "index"
         logger.info("Market history availability checked", event="market_history_availability_checked",
@@ -169,6 +168,8 @@ def get_market(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except StarRocksUnavailable:
+        raise
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

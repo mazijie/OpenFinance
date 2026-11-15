@@ -12,7 +12,7 @@ from backend.config import settings
 from backend.ingestion.collectors.caixin import CaixinCollector
 from backend.ingestion.writers.bronze_writer import BronzeWriter
 from backend.logging_utils import configure_logging, get_logger
-from backend.repositories.news_repository import NewsRepository
+from backend.lakehouse.news_writer import NewsWriter
 from backend.utils.time import ensure_utc, parse_possible_datetime
 
 logger = get_logger(__name__)
@@ -52,11 +52,11 @@ async def ingest_finance_news(
     writer = BronzeWriter()
     # Deduplicate against both layers; a failed Silver job can replay its Bronze object.
     bronze_ids = writer.all_external_ids(prefix="news/provider=caixin/")
-    repository = NewsRepository()
+    silver_writer = NewsWriter()
     resolved_start = ensure_utc(start_time)
     resolved_end = ensure_utc(end_time)
     response = await collector.collect_news(
-        existing_external_ids=bronze_ids | repository.all_external_ids(),
+        existing_external_ids=bronze_ids | silver_writer.all_external_ids(),
     )
     object_path: str | None = None
     if response.articles:

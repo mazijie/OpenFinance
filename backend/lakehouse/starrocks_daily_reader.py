@@ -18,7 +18,7 @@ FIELDS = (
 
 
 class StarRocksUnavailable(RuntimeError):
-    """The daily history query could not be served by StarRocks."""
+    """A query could not be served by StarRocks."""
 
 
 def _identifier(value: str) -> str:
@@ -34,14 +34,17 @@ def _utc_naive(value: datetime) -> datetime:
 
 
 class StarRocksDailyReader:
-    def _table(self, snapshot_id: int) -> str:
+    def __init__(self, *, allow_latest: bool = False) -> None:
+        self.allow_latest = allow_latest
+
+    def _table(self, snapshot_id: int | None, table_name: str | None = None) -> str:
         # Snapshot IDs cannot be bound as SQL expressions in every MySQL client.
-        if isinstance(snapshot_id, bool) or not isinstance(snapshot_id, int) or snapshot_id < 0:
+        if snapshot_id is not None and (isinstance(snapshot_id, bool) or not isinstance(snapshot_id, int) or snapshot_id < 0):
             raise ValueError("A valid Iceberg snapshot ID is required")
         table = ".".join(_identifier(value) for value in (
-            settings.STARROCKS_CATALOG, settings.ICEBERG_NAMESPACE, settings.ICEBERG_DAILY_BARS_TABLE,
+            settings.STARROCKS_CATALOG, settings.ICEBERG_NAMESPACE, table_name or settings.ICEBERG_DAILY_BARS_TABLE,
         ))
-        return f"{table} FOR VERSION AS OF {snapshot_id}"
+        return f"{table} FOR VERSION AS OF {snapshot_id}" if snapshot_id is not None else table
 
     def _query(self, sql: str, args: tuple) -> list[dict]:
         try:
@@ -64,11 +67,11 @@ class StarRocksDailyReader:
             finally:
                 connection.close()
         except Exception as exc:
-            raise StarRocksUnavailable("StarRocks daily history query failed") from exc
+            raise StarRocksUnavailable("StarRocks query failed") from exc
 
     def scan_daily_bars_for_query(self, *, symbol, security_id, start_date, end_date,
                                   adjustment_type, as_of, limit, table=None, snapshot_id=None):
-        if snapshot_id is None:
+        if snapshot_id is None and not self.allow_latest:
             return []
         if not (security_id or symbol):
             raise ValueError("symbol or security_id is required")
@@ -86,7 +89,7 @@ class StarRocksDailyReader:
         return [DailyBarRecord.model_validate(row) for row in rows]
 
     def has_daily_bars_before(self, *, symbol, adjustment_type, before, as_of, table=None, snapshot_id=None):
-        if snapshot_id is None:
+        if snapshot_id is None and not self.allow_latest:
             return False
         cutoff = _utc_naive(as_of)
         sql = (f"SELECT 1 FROM {self._table(snapshot_id)} WHERE `symbol` = %s "

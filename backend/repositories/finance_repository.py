@@ -8,16 +8,15 @@ from statistics import stdev
 import threading
 import time
 
-from backend.config import settings
-from backend.lakehouse.finance_writer import FinanceWriter
+from backend.lakehouse.starrocks_readers import StarRocksReader
 from backend.schemas.finance import DailyBarRecord, MarketQueryParams, MarketSummary, SecurityOption
 
 
 class FinanceRepository:
     """Read-only repository over finance Silver and Gold data."""
 
-    def __init__(self, writer: FinanceWriter | None = None) -> None:
-        self.writer = writer or FinanceWriter()
+    def __init__(self, writer: StarRocksReader | None = None) -> None:
+        self.writer = writer or StarRocksReader()
         self._security_options_cache: list[SecurityOption] | None = None
         self._security_options_expires_at = 0.0
         self._security_options_lock = threading.Lock()
@@ -42,18 +41,7 @@ class FinanceRepository:
             if self._security_options_cache is not None and now < self._security_options_expires_at:
                 return list(self._security_options_cache)
 
-            scan = getattr(self.writer, "scan_security_options", None)
-            if callable(scan):
-                options = [SecurityOption.model_validate(item) for item in scan()]
-            else:  # pragma: no cover - compatibility for lightweight test doubles
-                options = [
-                    SecurityOption(
-                        symbol=record.symbol.upper(),
-                        name=record.name,
-                        exchange=record.exchange.upper(),
-                    )
-                    for record in self.writer.scan_security_master()
-                ]
+            options = [SecurityOption.model_validate(item) for item in self.writer.scan_security_options()]
             options.sort(key=lambda item: item.symbol)
             self._security_options_cache = options
             self._security_options_expires_at = now + 300
@@ -62,15 +50,7 @@ class FinanceRepository:
     def is_trading_day(self, trading_date: date) -> bool | None:
         """Return whether the local exchange calendar marks the date open."""
 
-        scan = getattr(self.writer, "scan_trading_calendar_for_date", None)
-        if callable(scan):
-            rows = scan(trading_date)
-        else:  # pragma: no cover - compatibility for test doubles
-            rows = [
-                row
-                for row in self.writer.scan_trading_calendar()
-                if row.trading_date == trading_date
-            ]
+        rows = self.writer.scan_trading_calendar_for_date(trading_date)
         if not rows:
             return None
         return any(
@@ -81,32 +61,20 @@ class FinanceRepository:
 
     def _resolve_visible_bars(self, params: MarketQueryParams, *, table=None, snapshot_id=None, daily_reader=None) -> list[DailyBarRecord]:
         as_of = params.as_of or datetime.now(UTC)
-        scan = getattr(daily_reader or self.writer, "scan_daily_bars_for_query", None)
-        if callable(scan):
-            kwargs = dict(
-                symbol=params.symbol,
-                security_id=params.security_id,
-                start_date=params.start_date,
-                end_date=params.end_date,
-                adjustment_type=params.adjustment_type,
-                as_of=as_of,
-                limit=params.limit,
-            )
-            if table is not None:
-                kwargs["table"] = table
-            if snapshot_id is not None:
-                kwargs["snapshot_id"] = snapshot_id
-            selected = scan(**kwargs)
-        else:  # pragma: no cover - compatibility for lightweight test doubles
-            selected = [
-                bar
-                for bar in self.writer.scan_daily_bars()
-                if self._matches_selector(bar, params)
-                and params.start_date <= bar.trading_date <= params.end_date
-                and bar.adjustment_type == params.adjustment_type
-                and bar.available_at <= as_of
-                and bar.ingested_at <= as_of
-            ]
+        kwargs = dict(
+            symbol=params.symbol,
+            security_id=params.security_id,
+            start_date=params.start_date,
+            end_date=params.end_date,
+            adjustment_type=params.adjustment_type,
+            as_of=as_of,
+            limit=params.limit,
+        )
+        if table is not None:
+            kwargs["table"] = table
+        if snapshot_id is not None:
+            kwargs["snapshot_id"] = snapshot_id
+        selected = (daily_reader or self.writer).scan_daily_bars_for_query(**kwargs)
 
         latest_by_key: dict[tuple[str, object, str], DailyBarRecord] = {}
         for bar in selected:
@@ -120,13 +88,6 @@ class FinanceRepository:
             ):
                 latest_by_key[key] = bar
         return sorted(latest_by_key.values(), key=lambda item: (item.security_id, item.trading_date))
-
-    def _matches_selector(self, bar: DailyBarRecord, params: MarketQueryParams) -> bool:
-        if params.security_id and bar.security_id != params.security_id:
-            return False
-        if params.symbol and bar.symbol.upper() != params.symbol.upper():
-            return False
-        return True
 
     def _summarize_bars(self, bars: list[DailyBarRecord], adjustment_type: str) -> MarketSummary:
         ordered = sorted(bars, key=lambda item: item.trading_date)

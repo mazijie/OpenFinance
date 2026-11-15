@@ -149,7 +149,6 @@ def test_starrocks_is_selected_for_all_history_periods_and_unavailable_returns_5
     from backend.lakehouse.starrocks_daily_reader import StarRocksDailyReader, StarRocksUnavailable
 
     service = FakeFinanceService(MarketSearchResult(items=[]))
-    monkeypatch.setattr("backend.api.market.settings.MARKET_DAILY_READER", "starrocks")
     monkeypatch.setattr("backend.api.market.has_earlier", lambda **kwargs: False)
     app.dependency_overrides[get_finance_service] = lambda: service
     try:
@@ -170,10 +169,6 @@ def test_starrocks_is_selected_for_all_history_periods_and_unavailable_returns_5
             assert response.status_code == 200 and response.json()["has_more"] is True
             assert isinstance(calls[-1]["daily_reader"], StarRocksDailyReader)
             assert calls[-1]["snapshot_id"] == 1234567890123456789
-        monkeypatch.setattr("backend.api.market.settings.MARKET_DAILY_READER", "iceberg")
-        assert client.get("/api/market/history", params={"symbol": "600519.SH", "period": "monthly"}).status_code == 200
-        assert "daily_reader" not in service.calls[-1]
-        monkeypatch.setattr("backend.api.market.settings.MARKET_DAILY_READER", "starrocks")
         def fail(**kwargs):
             raise StarRocksUnavailable("StarRocks daily history query failed")
         service.search_market = fail

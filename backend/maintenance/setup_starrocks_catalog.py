@@ -1,6 +1,7 @@
 """Configure the StarRocks Iceberg catalog and its read-only application user."""
 from __future__ import annotations
 
+import argparse
 import os
 
 from backend.config import settings
@@ -17,9 +18,19 @@ def required(name: str) -> str:
 def main() -> None:
     import pymysql
 
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--grant-only", action="store_true", help="Only grant access to existing catalog and user")
+    args = parser.parse_args()
+
     catalog = _identifier(settings.STARROCKS_CATALOG)
     namespace = _identifier(settings.ICEBERG_NAMESPACE)
-    table = _identifier(settings.ICEBERG_DAILY_BARS_TABLE)
+    tables = [
+        settings.ICEBERG_DAILY_BARS_TABLE, settings.ICEBERG_SECURITY_MASTER_TABLE,
+        settings.ICEBERG_TRADING_CALENDAR_TABLE, settings.ICEBERG_NEWS_TABLE,
+        settings.ICEBERG_GOLD_METRICS_TABLE, "gold_market_cross_section", settings.ICEBERG_ANNUAL_REPORT_TABLE,
+        settings.ICEBERG_ANNUAL_REPORT_PAGE_TABLE, settings.ICEBERG_ANNUAL_REPORT_PARSE_RUN_TABLE,
+        settings.ICEBERG_ANNUAL_REPORT_REGION_TABLE, settings.ICEBERG_ANNUAL_REPORT_CHUNK_TABLE,
+    ]
     user = _identifier(settings.STARROCKS_USER)
     properties = {
         "type": "iceberg", "iceberg.catalog.type": "jdbc",
@@ -52,12 +63,21 @@ def main() -> None:
                     if properties[key] not in definition:
                         raise RuntimeError(f"Existing catalog does not match expected {key}")
             else:
+                if args.grant_only:
+                    raise RuntimeError("Catalog does not exist; run the full initialization first")
                 cursor.execute(f"CREATE EXTERNAL CATALOG {catalog} PROPERTIES ({assignments})")
-            cursor.execute(f"CREATE USER IF NOT EXISTS {user} IDENTIFIED BY %s", (reader_password,))
-            cursor.execute(f"ALTER USER {user} IDENTIFIED BY %s", (reader_password,))
+            if not args.grant_only:
+                cursor.execute(f"CREATE USER IF NOT EXISTS {user} IDENTIFIED BY %s", (reader_password,))
+                cursor.execute(f"ALTER USER {user} IDENTIFIED BY %s", (reader_password,))
             cursor.execute(f"GRANT USAGE ON CATALOG {catalog} TO USER {user}")
             cursor.execute(f"SET CATALOG {catalog}")
-            cursor.execute(f"GRANT SELECT ON TABLE {namespace}.{table} TO USER {user}")
+            cursor.execute(f"SHOW TABLES FROM {namespace}")
+            existing_tables = {str(row[0]) for row in cursor.fetchall()}
+            for table_name in tables:
+                if table_name not in existing_tables:
+                    print(f"Skipping missing table {table_name}; rerun initialization after it is created.")
+                    continue
+                cursor.execute(f"GRANT SELECT ON TABLE {namespace}.{_identifier(table_name)} TO USER {user}")
     finally:
         connection.close()
     print("Catalog and read-only user configured. Verify snapshot compatibility before enabling the reader.")

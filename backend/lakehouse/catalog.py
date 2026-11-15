@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from typing import Any
+import atexit
+import os
+import threading
 
 try:  # pragma: no cover - exercised in real environment
     from pyiceberg.catalog import Catalog, load_catalog
@@ -13,8 +16,45 @@ except ImportError:  # pragma: no cover - test fallback
 from backend.config import settings
 
 
+_catalog = None
+_lock = threading.Lock()
+
+
+def _after_fork() -> None:
+    global _catalog, _lock
+    # Inherited database connections must never be reused by a child process.
+    if _catalog is not None and getattr(_catalog, "engine", None) is not None:
+        _catalog.engine.dispose(close=False)
+    _catalog = None
+    _lock = threading.Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_after_fork)
+
+
+def close_catalog() -> None:
+    global _catalog
+    with _lock:
+        catalog, _catalog = _catalog, None
+    engine = getattr(catalog, "engine", None)
+    if engine is not None:
+        engine.dispose()
+
+
+atexit.register(close_catalog)
+
+
 def get_catalog() -> Catalog:
-    """Load Iceberg SQL catalog backed by PostgreSQL."""
+    """Return one SQL catalog and connection pool per process."""
+    global _catalog
+    with _lock:
+        if _catalog is None:
+            _catalog = _load_catalog()
+        return _catalog
+
+
+def _load_catalog() -> Catalog:
 
     if load_catalog is None:
         raise RuntimeError("pyiceberg dependency is not installed")

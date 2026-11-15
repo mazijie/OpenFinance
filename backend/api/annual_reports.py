@@ -1,8 +1,10 @@
-"""Annual-report serving API."""
+﻿"""Annual-report serving API."""
 
 from __future__ import annotations
 
 from functools import lru_cache
+
+from backend.lakehouse.starrocks_daily_reader import StarRocksUnavailable
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
@@ -28,6 +30,8 @@ def list_reports(
 ) -> AnnualReportPageResult:
     try:
         return service.list_reports(stock_code=stock_code, report_year=report_year, page=page, page_size=page_size)
+    except StarRocksUnavailable:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to list annual reports: {exc}") from exc
 

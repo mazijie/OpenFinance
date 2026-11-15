@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import time
 from contextlib import contextmanager
 
 from backend.config import settings
@@ -12,6 +13,9 @@ from backend.rag.annual_report_store import AnnualReportVectorStore
 from backend.rag.annual_report_lexical_store import AnnualReportLexicalStore
 from backend.lakehouse.annual_report_visibility import committed_reports
 from backend.rag.embeddings import EmbeddingService
+from backend.logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 class AnnualReportRAGIndexer:
@@ -19,7 +23,13 @@ class AnnualReportRAGIndexer:
 
     def __init__(self, *, writer: AnnualReportWriter | None = None, store: AnnualReportVectorStore | None = None, embedding_service: EmbeddingService | None = None, lexical_store: AnnualReportLexicalStore | None = None, state_store: AnnualReportPipelineStateStore | None = None) -> None:
         self._versioned = state_store is not None or all(item is None for item in (writer, store, embedding_service, lexical_store))
-        self.writer = writer or AnnualReportWriter()
+        if writer is not None:
+            self.writer = writer
+        elif settings.ANNUAL_REPORT_INDEX_READER == "starrocks":
+            from backend.rag.annual_report_index_reader import StarRocksAnnualReportIndexReader
+            self.writer = StarRocksAnnualReportIndexReader()
+        else:
+            self.writer = AnnualReportWriter()
         self.store = store or AnnualReportVectorStore()
         self.embedding_service = embedding_service or EmbeddingService()
         self.lexical_store = lexical_store or AnnualReportLexicalStore()
@@ -35,16 +45,24 @@ class AnnualReportRAGIndexer:
         self.embedding_service.close()
         self.lexical_store.close()
 
+    def _read_silver(self):
+        results = []
+        for kind, method in (("chunks", self.writer.scan_chunks), ("reports", self.writer.scan_reports),
+                             ("parse_runs", self.writer.scan_parse_runs), ("pages", self.writer.scan_pages)):
+            started = time.monotonic()
+            rows = method()
+            logger.info("Annual report index source read", event="annual_report_index_source_read",
+                        extra_fields={"reader": type(self.writer).__name__, "source": kind,
+                                      "rows": len(rows), "duration_seconds": round(time.monotonic() - started, 3)})
+            results.append(rows)
+        return results
+
     def run(self, *, rebuild_all: bool = False) -> dict[str, int | str]:
         if self._versioned:
             with self._generation_lock():
                 return self._run_versioned(rebuild_all=rebuild_all)
-        if rebuild_all:
-            self.store.clear()
-            self.lexical_store.clear()
-        chunks_from_silver = self.writer.scan_chunks()
-        reports = committed_reports(self.writer.scan_reports(), self.writer.scan_parse_runs())
-        pages = self.writer.scan_pages()
+        chunks_from_silver, report_rows, parse_runs, pages = self._read_silver()
+        reports = committed_reports(report_rows, parse_runs)
         page_status = {(page.report_id, page.parse_run_id, page.page_number): page.extraction_status for page in pages}
         chunks: list[dict] = []
         skipped_review_pages: set[tuple[str, int]] = {(page.report_id, page.page_number) for page in pages if page.report_id in reports and page.parse_run_id == reports[page.report_id].parse_run_id and page.extraction_status != "ok"}
@@ -76,6 +94,9 @@ class AnnualReportRAGIndexer:
                 "announcement_time": report.announcement_time,
                 "ingested_at": report.ingested_at,
             })
+        if rebuild_all:
+            self.store.clear()
+            self.lexical_store.clear()
         current_ids = [item["chunk_id"] for item in chunks]
         self.store.retain_chunks(current_ids)
         self.lexical_store.retain_chunks(current_ids)
@@ -119,9 +140,8 @@ class AnnualReportRAGIndexer:
             self.state_store.delete_generation_record(expired)
 
     def _run_versioned(self, *, rebuild_all: bool) -> dict[str, int]:
-        chunks_from_silver = self.writer.scan_chunks()
-        reports = committed_reports(self.writer.scan_reports(), self.writer.scan_parse_runs())
-        pages = self.writer.scan_pages()
+        chunks_from_silver, report_rows, parse_runs, pages = self._read_silver()
+        reports = committed_reports(report_rows, parse_runs)
         page_status = {(page.report_id, page.parse_run_id, page.page_number): page.extraction_status for page in pages}
         chunks: list[dict] = []
         skipped_review_pages: set[tuple[str, int]] = {

@@ -51,8 +51,8 @@ class FakeWriter:
     def __init__(self, rows: list[AnnualReportRecord] | None = None) -> None:
         self.rows = rows or []
 
-    def scan_reports(self) -> list[AnnualReportRecord]:
-        return self.rows
+    def scan_reports(self, report_id=None) -> list[AnnualReportRecord]:
+        return [row for row in self.rows if report_id is None or row.report_id == report_id]
 
     def scan_parse_runs(self, report_id: str | None = None):
         return [SimpleNamespace(report_id=row.report_id, parse_run_id=row.parse_run_id, started_at=NOW, finished_at=NOW) for row in self.rows]

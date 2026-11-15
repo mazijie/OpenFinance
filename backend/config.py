@@ -63,7 +63,6 @@ class Settings(BaseSettings):
     ICEBERG_GOLD_METRICS_TABLE: str = "gold_security_daily_metrics"
     ICEBERG_S3_PATH_STYLE_ACCESS: bool = True
 
-    MARKET_DAILY_READER: Literal["iceberg", "starrocks"] = "iceberg"
     STARROCKS_HOST: str = "localhost"
     STARROCKS_PORT: int = 9030
     STARROCKS_USER: str = "openfinance_reader"
@@ -168,6 +167,7 @@ class Settings(BaseSettings):
 
     RAG_VECTOR_TABLE: str = "news_chunks"
     RAG_ANNUAL_REPORT_VECTOR_TABLE: str = "annual_report_chunks"
+    ANNUAL_REPORT_INDEX_READER: Literal["pyiceberg", "starrocks"] = "starrocks"
     RAG_EMBEDDING_MODEL: str = "bge-m3"
     RAG_EMBEDDING_PATH: str = "/embeddings"
     RAG_EMBEDDING_DIMENSION: int = 1024
