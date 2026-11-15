@@ -121,13 +121,14 @@ async function loadSecurityOptions() {
     securitySearch.disabled = false;
     securitySearch.placeholder = items.length ? "输入股票名称或代码" : "暂无可用证券";
     symbolInput.innerHTML = items.length
-      ? items.map((item) => `<option value="${escapeHtml(item.symbol)}" data-exchange="${escapeHtml(item.exchange)}">${escapeHtml(item.symbol)} · ${escapeHtml(item.name)}</option>`).join("")
+      ? items.map((item) => `<option value="${escapeHtml(item.symbol)}" data-exchange="${escapeHtml(item.exchange)}" data-name="${escapeHtml(item.name)}">${escapeHtml(item.symbol)} · ${escapeHtml(item.name)}</option>`).join("")
       : '<option value="" selected disabled>暂无可用证券</option>';
     if (items.some((item) => item.symbol === "600519.SH")) symbolInput.value = "600519.SH";
     if (items.length) securitySearch.value = `${items[symbolInput.selectedIndex].name} · ${items[symbolInput.selectedIndex].symbol}`;
     if (items.length && marketForm.checkValidity()) loadMarket();
     if (items.length) loadRealtimeQuotes();
     loadQuickReports();
+    symbolInput.dispatchEvent(new Event("security-update"));
   } catch (error) {
     console.warn(error.message || "证券列表加载失败");
     symbolInput.innerHTML = '<option value="" selected disabled>证券列表加载失败</option>';
@@ -696,7 +697,7 @@ async function loadMarket() {
   state.historySymbol = /^\d{6}$/.test(selected) && ["SH", "SZ", "BJ"].includes(exchange) ? `${selected}.${exchange}` : selected;
   ++state.intradayRequestId;
   clearMarket();
-  if (state.marketPeriod === "intraday") { marketSourceBadge.textContent = symbolInput.value; renderSelectedPeriod(); return; }
+  if (state.marketPeriod === "intraday") { marketSourceBadge.textContent = selectedQuoteSymbol(); renderSelectedPeriod(); return; }
   historyStatus.hidden = false;
   setLoading(true);
   await loadHistoryPage(requestId, false);
@@ -742,7 +743,7 @@ async function loadHistoryPage(requestId, older) {
     state.historyHasMore = payload.has_more === true;
     if (!older && summary) {
       state.marketSummary = summary;
-      marketSourceBadge.textContent = `${summary.symbol} · ${summary.exchange}`;
+      marketSourceBadge.textContent = summary.symbol.includes(".") || !summary.exchange ? summary.symbol : `${summary.symbol}.${summary.exchange}`;
     } else if (!older) marketSourceBadge.textContent = symbolInput.value;
     state.historyReady = true;
     if (!older) state.lastReconcileAt = Date.now();
@@ -1728,6 +1729,7 @@ securitySearch.addEventListener("click", () => { if (securityResults.hidden) sho
 securitySearch.addEventListener("blur", closeSecurityResults);
 securitySearch.addEventListener("input", () => {
   symbolInput.selectedIndex = -1;
+  symbolInput.dispatchEvent(new Event("security-update"));
   loadQuickReports();
   showSecurityResults(securitySearch.value);
   ++state.marketRequestId;
@@ -1824,7 +1826,7 @@ function renderRealtimeIndices(indices = []) {
     const change = Number(item.change);
     const color = change > 0 ? "market-up" : change < 0 ? "market-down" : "market-flat";
     const sign = change > 0 ? "+" : "";
-    return `<div class="index-card"><span class="index-name">${name}</span><strong class="${color}">${formatNumber(item.price)}</strong><span class="index-change ${color}">${sign}${formatNumber(change)}　${sign}${formatNumber(item.change_percent)}%</span><small>${escapeHtml(formatRealtimeTime(item.source_time))}</small></div>`;
+    return `<div class="index-card" title="行情时间：${escapeHtml(formatRealtimeTime(item.source_time))}"><span class="index-name">${name}</span><strong class="${color}">${formatNumber(item.price)}</strong><span class="index-change ${color}">${sign}${formatNumber(change)}　${sign}${formatNumber(item.change_percent)}%</span></div>`;
   }).join("");
 }
 renderRealtimeIndices();

@@ -1,7 +1,7 @@
 """Business-facing market cross sections and citable stock research."""
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 
 from backend.lakehouse.starrocks_daily_reader import StarRocksDailyReader
@@ -21,11 +21,13 @@ class MarketGoldService:
     def screen(self, *, as_of: datetime, trading_date: date | None = None,
                sort_by: str = 'return_1d', direction: Literal['asc', 'desc'] = 'desc',
                limit: int = 20, min_value: float | None = None, max_value: float | None = None,
-               symbol: str | None = None):
+               symbol: str | None = None, return_sign: Literal['positive', 'negative'] | None = None):
         if sort_by not in SORT_FIELDS or direction not in ('asc', 'desc') or not 1 <= limit <= 100:
             raise ValueError('Invalid market screen parameters')
         if min_value is not None and max_value is not None and min_value > max_value:
             raise ValueError('min_value must not exceed max_value')
+        if return_sign not in (None, 'positive', 'negative'):
+            raise ValueError('Invalid return sign')
         table = self.reader._table(None, TABLE)
         date_sql = f'SELECT MAX(`trading_date`) AS `day` FROM {table} WHERE `trading_date` <= %s'
         date_args = [trading_date or as_of.date()]
@@ -43,6 +45,8 @@ class MarketGoldService:
             args.append(symbol.strip().upper())
         else:
             where.append(f'`{sort_by}` IS NOT NULL')
+        if return_sign:
+            where.append(f'`{sort_by}` {">" if return_sign == "positive" else "<"} 0')
         for operator, value in (('>=', min_value), ('<=', max_value)):
             if value is not None:
                 where.append(f'`{sort_by}` {operator} %s')
@@ -55,6 +59,52 @@ class MarketGoldService:
                                       ('close', 'volume', 'amount', 'turnover', 'return_1d', 'return_5d', 'return_20d', 'avg_amount_5d', 'avg_amount_20d'))
                                   else 'complete')
         return {'trading_date': day, 'items': rows, 'method': METHOD, 'as_of': as_of.isoformat()}
+
+    def ranking(self, *, period: Literal['day', 'five_days', 'month', 'year'], as_of: datetime,
+                limit: int = 20, side: Literal['positive', 'negative'] = 'positive'):
+        """Rank the latest market cross-section by the requested trailing return."""
+        if side not in ('positive', 'negative'):
+            raise ValueError('Invalid ranking side')
+        direction = 'desc' if side == 'positive' else 'asc'
+        fields = {'day': 'return_1d', 'five_days': 'return_5d', 'month': 'return_20d'}
+        if period in fields:
+            result = self.screen(as_of=as_of, sort_by=fields[period], limit=limit,
+                                 direction=direction, return_sign=side)
+            return {**result, 'period': period, 'return_field': fields[period], 'side': side}
+        if period != 'year' or not 1 <= limit <= 100:
+            raise ValueError('Invalid market ranking parameters')
+        table = self.reader._table(None, TABLE)
+        date_rows = self.reader._query(
+            f'SELECT MAX(`trading_date`) AS `day` FROM {table} WHERE `trading_date` <= %s',
+            (as_of.date(),),
+        )
+        day = date_rows[0]['day'] if date_rows else None
+        if day is None:
+            return {'trading_date': None, 'items': [], 'period': period, 'return_field': 'return_1y', 'side': side, 'method': METHOD, 'as_of': as_of.isoformat()}
+        if isinstance(day, str):
+            day = date.fromisoformat(day)
+        try:
+            cutoff = day.replace(year=day.year - 1)
+        except ValueError:  # February 29
+            cutoff = day.replace(year=day.year - 1, day=28)
+        # Avoid presenting a much older quote as a one-year return.
+        earliest = cutoff - timedelta(days=14)
+        comparison = '>' if side == 'positive' else '<'
+        sql = f'''SELECT current.*, (current.`close` / previous.`close` - 1) AS `return_1y`
+                  FROM {table} AS current
+                  JOIN (SELECT `security_id`, MAX(`trading_date`) AS `prior_date`
+                        FROM {table} WHERE `trading_date` BETWEEN %s AND %s
+                        GROUP BY `security_id`) AS baseline
+                    ON current.`security_id` = baseline.`security_id`
+                  JOIN {table} AS previous ON previous.`security_id` = baseline.`security_id`
+                    AND previous.`trading_date` = baseline.`prior_date`
+                  WHERE current.`trading_date` = %s AND current.`close` > 0 AND previous.`close` > 0
+                    AND current.`close` {comparison} previous.`close`
+                  ORDER BY `return_1y` {direction.upper()}, current.`security_id` ASC LIMIT %s'''
+        rows = self.reader._query(sql, (earliest, cutoff, day, limit))
+        return {'trading_date': day, 'items': rows, 'period': period, 'return_field': 'return_1y', 'side': side,
+                'method': '近一年收益按最新收盘价与一年前或之前最近收盘价计算；基准超过 14 天缺失时不参与排行。',
+                'as_of': as_of.isoformat()}
 
     def overview(self, *, symbol: str, query: str, as_of: datetime, limit: int = 5):
         from backend.harness.evidence import EvidenceService

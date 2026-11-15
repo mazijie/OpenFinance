@@ -349,3 +349,219 @@ button:focus-visible, a:focus-visible, summary:focus-visible, input:focus-visibl
   .index-grid { grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); }
   .quick-panels { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Daily cross-section metrics for the selected security. */
+.gold-metrics { flex: 0 0 auto; margin: 0 0 10px; padding: 10px 12px; border: 1px solid #dceae6; border-radius: 10px; background: #f7fbfa; }
+.gold-metrics-heading { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 5px 12px; }
+.gold-metrics-heading h3 { margin: 0; color: var(--ink); font-size: 14px; }
+.gold-metrics-heading > span { color: #627f78; font-size: 11px; }
+.gold-metrics-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 10px; margin-top: 9px; }
+.gold-metrics-grid > div { display: grid; gap: 3px; min-width: 0; }
+.gold-metrics-grid span { color: #6b7f88; font-size: 11px; }
+.gold-metrics-grid strong { color: #233b42; font-size: 13px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.gold-metrics-grid strong.market-up { color: #d84c55; }
+.gold-metrics-grid strong.market-down { color: #16836b; }
+.gold-metrics-note { margin: 8px 0 0; color: #708680; font-size: 10px; line-height: 1.35; }
+@media (min-width: 901px) and (min-height: 650px) {
+  html, body { height: 100%; overflow: hidden; }
+  .topbar { height: 68px; min-height: 68px; padding-block: 8px; }
+  .workspace { height: calc(100dvh - 68px); padding-bottom: 12px; }
+  .page-view.active { height: 100%; min-height: 0; align-items: stretch; }
+  #marketPage { grid-template-rows: auto minmax(0, 1fr); gap: 10px; }
+  .market-overview-card { padding: 8px 14px; gap: 12px; }
+  .index-card { padding: 6px 10px; }
+  .index-card strong { font-size: 16px; margin: 2px 0; }
+  .market-panel { height: 100%; min-height: 0; overflow-y: auto; padding: 14px; }
+  .market-panel > .section-heading { padding-bottom: 9px; }
+  .market-query { padding: 9px 0; }
+  .market-message { min-height: 0; margin-bottom: 8px; padding: 6px 9px; }
+  .stock-price, .stock-metrics { margin-bottom: 8px; }
+  .chart-card { flex: 1 0 150px; min-height: 150px; }
+  .chart-wrap { height: 0; min-height: 85px; flex: 1 1 auto; }
+  .chart-empty { inset: 60px 0 0; }
+  .research-disclosure { flex: 0 0 auto; padding: 9px 12px; }
+  .research-sidebar { height: 100%; min-height: 0; grid-template-rows: minmax(0, 1fr) minmax(135px, 30%); gap: 10px; }
+  .chat-panel { min-height: 0; overflow: hidden; }
+  .chat-panel > .section-heading { padding: 12px 14px; }
+  .chat-model-config[open] { max-height: 45%; overflow-y: auto; }
+  .messages { flex: 1 1 auto; min-height: 0; max-height: none; }
+  .chat-form { flex: 0 0 auto; padding: 9px 12px; }
+  .chat-form textarea { min-height: 56px; }
+  .quick-panels { min-height: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .quick-panel { display: flex; min-height: 0; flex-direction: column; padding: 12px; overflow: hidden; }
+  .quick-list { flex: 1; min-height: 0; overflow-y: auto; }
+  .quick-heading h2 { font-size: 14px; }
+  .research-page { min-height: 0; }
+  .news-panel, .reports-panel { height: 100%; min-height: 0; overflow: hidden; }
+  .news-list, .report-list { flex: 1; min-height: 0; overflow-y: auto; }
+}
+@media (max-width: 600px) {
+  .gold-metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* Keep the market pulse readable as a compact ticker on desktop. */
+@media (min-width: 901px) and (min-height: 650px) {
+  .market-overview-card { grid-template-columns: auto minmax(0, 1fr); gap: 14px; padding: 7px 12px; }
+  .overview-heading .eyebrow { display: none; }
+  .overview-heading h2 { margin: 0; white-space: nowrap; font-size: 14px; }
+  .overview-content { flex-direction: row; align-items: center; gap: 12px; }
+  .index-grid { flex: 1 1 auto; gap: 6px; }
+  .index-card { display: flex; align-items: baseline; justify-content: center; flex-wrap: wrap; gap: 3px 8px; min-height: 34px; padding: 7px 8px; box-shadow: none; }
+  .index-card .index-name { white-space: nowrap; }
+  .index-card strong { display: inline; margin: 0; font-size: 15px; white-space: nowrap; }
+  .index-change { font-size: 11px; white-space: nowrap; }
+  .market-breadth { justify-content: flex-end; gap: 4px; }
+  .breadth-item { gap: 4px; padding: 4px 6px; font-size: 11px; }
+  .breadth-item strong { font-size: 12px; }
+  .market-meta { width: auto; margin-left: 3px; font-size: 10px; }
+}
+@media (min-width: 901px) and (max-width: 1250px) and (min-height: 650px) {
+  .overview-content { flex-wrap: wrap; }
+  .market-breadth { flex-wrap: nowrap; }
+  .market-meta { display: none; }
+}
+/* Real-time quotes and daily indicators share one compact metrics area. */
+.gold-metrics { background: #fff; border-color: var(--line); }
+.gold-metrics .stock-price { margin: 8px 0 0; }
+.gold-metrics-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+@media (max-width: 1100px) { .gold-metrics-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .gold-metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 901px) and (min-height: 650px) {
+  .market-panel > .section-heading, .market-panel > .market-query, .market-panel > .market-message { flex-shrink: 0; }
+  .gold-metrics-grid > div { align-content: start; line-height: 1.2; }
+}
+@media (min-width: 901px) and (min-height: 650px) and (max-height: 800px) {
+  .market-panel { padding: 10px 14px; }
+  .gold-metrics { padding: 7px 12px; margin-bottom: 7px; }
+  .gold-metrics-grid { gap: 5px 10px; margin-top: 6px; }
+  .gold-metrics-note { margin-top: 5px; }
+  .chart-card { flex-basis: 120px; min-height: 120px; }
+  .chart-wrap { min-height: 60px; }
+}
+
+.market-ranking { display: flex; flex-direction: column; min-width: 0; min-height: 0; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.ranking-header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.ranking-header h2 { margin: 0; color: var(--ink); font-size: 18px; line-height: 1.2; }
+.ranking-header span { color: var(--muted); font-size: 11px; }
+.ranking-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.ranking-tabs button { min-width: 48px; border: 0; border-radius: 6px; padding: 5px 8px; background: transparent; color: #718096; font-weight: 700; font-size: 12px; }
+.ranking-tabs button.active { background: var(--teal-soft); color: var(--teal); }
+.ranking-list { min-height: 48px; max-height: 250px; overflow: auto; color: #718096; font-size: 12px; }
+.ranking-list table { width: 100%; }
+.ranking-list th, .ranking-list td { padding: 5px 8px; }
+.ranking-list th:first-child, .ranking-list td:first-child { width: 48px; text-align: left; }
+.ranking-list th:nth-child(2), .ranking-list td:nth-child(2) { text-align: left; }
+.ranking-list th:last-child, .ranking-list td:last-child { text-align: right; }
+.ranking-empty { margin: 12px 0; }
+.ranking-note { margin: 5px 0 0; color: #718096; font-size: 10px; line-height: 1.3; }
+@media (min-width: 901px) and (min-height: 650px) {
+  .market-ranking { flex: 1 0 150px; margin-top: 8px; }
+  .ranking-list { flex: 1; max-height: none; }
+  .chart-card { flex: 1 0 105px; min-height: 105px; }
+  .chart-wrap { min-height: 45px; }
+}
+@media (min-width: 901px) and (min-height: 650px) and (max-height: 800px) {
+  .market-ranking { flex-basis: 135px; padding: 7px 10px; }
+  .ranking-tabs button { padding-block: 3px; }
+  .ranking-note { margin-top: 2px; }
+  .chart-card { flex-basis: 100px; min-height: 100px; }
+}
+@media (min-width: 901px) and (min-height: 650px) and (max-height: 800px) {
+  .market-panel > .section-heading { padding-bottom: 5px; }
+  .market-query { padding: 6px 0; }
+  .market-message { padding-block: 4px; margin-bottom: 5px; }
+  .gold-metrics { padding-block: 6px; }
+  .gold-metrics-grid { gap: 3px 10px; }
+  .chart-card { flex-basis: 88px; min-height: 88px; padding-top: 6px; }
+  .chart-wrap { min-height: 30px; }
+  .market-ranking { flex-basis: 120px; margin-top: 6px; }
+  .ranking-list { min-height: 30px; }
+}
+
+/* Market-wide ranking is separate from the selected-stock workspace. */
+.stock-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: stretch; gap: 12px; min-width: 0; }
+.stock-detail { min-width: 0; }
+.stock-detail .market-query { padding-top: 8px; }
+.stock-detail .gold-metrics { margin-bottom: 0; }
+.stock-detail .gold-metrics-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.stock-workspace .chart-card { min-width: 0; min-height: 280px; margin: 8px 0 0; }
+.market-ranking { margin: 0; }
+@media (min-width: 901px) and (min-height: 650px) {
+  #marketPage { grid-template-columns: minmax(0, 1.7fr) minmax(330px, .8fr); grid-template-rows: auto minmax(0, 1fr) minmax(145px, 25%); }
+  .market-panel { overflow: visible; }
+  .stock-workspace { flex: 1; min-height: 0; }
+  .stock-detail { min-height: 0; overflow-y: auto; padding-right: 2px; }
+  .stock-workspace .chart-card { height: calc(100% - 8px); min-height: 0; }
+  .stock-workspace .chart-wrap { min-height: 45px; }
+  .market-ranking { grid-column: 1 / -1; min-height: 0; padding: 9px 14px; overflow: hidden; }
+  .ranking-list { flex: 1; min-height: 0; }
+}
+@media (max-width: 900px) {
+  .stock-workspace { grid-template-columns: minmax(0, 1fr); }
+  .stock-workspace .chart-card { min-height: 260px; }
+}
+@media (max-width: 500px) {
+  .stock-detail .gold-metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* Overview, then market and research in aligned quadrants. */
+@media (min-width: 901px) and (min-height: 650px) {
+  #marketPage { grid-template-columns: minmax(0, 1.7fr) minmax(330px, .8fr); grid-template-rows: auto minmax(155px, 34%) minmax(0, 1fr); grid-template-areas: 'overview overview' 'stock links' 'ranking chat'; }
+  .market-overview-card { grid-area: overview; }
+  .market-ranking { grid-area: ranking; }
+  .quick-panels { grid-area: links; height: 100%; }
+  .market-panel { grid-area: stock; }
+  .chat-panel { grid-area: chat; height: 100%; }
+}
+@media (max-width: 900px), (max-height: 649px) {
+  #marketPage .market-ranking { grid-column: auto; }
+  #marketPage .quick-panels { min-height: 200px; }
+  #marketPage .chat-panel { position: static; }
+}
+
+@media (min-width: 901px) and (min-height: 650px) {
+  #marketPage { grid-template-rows: auto minmax(0, 1.15fr) minmax(170px, .85fr); }
+}
+
+/* Keep the research links compact and give the assistant the remaining height. */
+@media (min-width: 901px) and (min-height: 650px) {
+  #marketPage {
+    grid-template-rows: auto clamp(165px, 24vh, 220px) minmax(0, 1fr) minmax(150px, 30%);
+    grid-template-areas: 'overview overview' 'stock links' 'stock chat' 'ranking chat';
+  }
+}
+
+/* Size the stock row to its content and reserve more room for rankings. */
+@media (min-width: 901px) and (min-height: 650px) {
+  #marketPage {
+    grid-template-rows: auto clamp(165px, 24vh, 220px) minmax(0, 1fr) minmax(190px, 38%);
+  }
+  .stock-workspace { grid-template-rows: minmax(0, max-content); align-content: start; }
+  .stock-workspace .chart-card { height: calc(100% - 8px); }
+}
+@media (min-width: 1200px) and (min-height: 650px) {
+  .stock-detail .gold-metrics-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+/* Let the stock content determine its row and give unused space to the ranking. */
+.market-column, .research-column { display: grid; min-width: 0; gap: 10px; }
+@media (min-width: 901px) and (min-height: 650px) {
+  #marketPage { grid-template-areas: 'overview overview' 'market research'; grid-template-rows: auto minmax(0, 1fr); }
+  .market-column { grid-area: market; min-height: 0; grid-template-rows: fit-content(65%) minmax(0, 1fr); }
+  .research-column { grid-area: research; min-height: 0; grid-template-rows: clamp(165px, 24vh, 220px) minmax(0, 1fr); }
+  .market-panel { height: auto; min-height: 0; overflow-y: auto; }
+  .stock-workspace { flex: 0 0 auto; grid-template-rows: auto; }
+  .stock-detail { overflow: visible; }
+  .stock-workspace .chart-card { height: auto; min-height: 0; }
+  .market-ranking, .quick-panels, .chat-panel { grid-area: auto; }
+  .market-ranking { min-height: 0; }
+}
+@media (min-width: 901px) and (min-height: 650px) {
+  .market-column > .market-panel, .market-column > .market-ranking { grid-area: auto; }
+}
+.ranking-sides { display: flex; gap: 5px; margin: 3px 0 4px; }
+.ranking-sides button { border: 1px solid var(--line); border-radius: 6px; background: #fff; color: #647587; padding: 4px 9px; font-size: 11px; font-weight: 700; }
+.ranking-sides button.active { border-color: #9dcec5; background: var(--teal-soft); color: var(--teal); }
+.ranking-controls { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; }
+.ranking-controls .ranking-tabs { margin-top: 0; }
+.ranking-controls .ranking-sides { margin: 3px 0; }

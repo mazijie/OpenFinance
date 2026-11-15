@@ -57,3 +57,46 @@ def test_overview_retains_evidence_when_market_unavailable():
     result = MarketGoldService(FailingReader(), Evidence()).overview(symbol='600519.sh', query='经营', as_of=datetime.now(UTC))
     assert result['market'] is None
     assert len(result['missing']) == 3
+
+
+@pytest.mark.parametrize(('period', 'field'), [('day', 'return_1d'), ('five_days', 'return_5d'), ('month', 'return_20d')])
+def test_ranking_uses_requested_daily_window(period, field):
+    reader = Reader()
+    result = MarketGoldService(reader).ranking(period=period, as_of=datetime(2026, 11, 12, tzinfo=UTC), limit=5)
+    assert result['return_field'] == field
+    assert f'`{field}` IS NOT NULL' in reader.calls[1][0]
+    assert reader.calls[1][1][-1] == 5
+
+
+def test_year_ranking_uses_one_year_baseline_with_bounded_staleness():
+    reader = Reader()
+    result = MarketGoldService(reader).ranking(period='year', as_of=datetime(2026, 11, 12, tzinfo=UTC), limit=5)
+    sql, args = reader.calls[1]
+    assert result['return_field'] == 'return_1y'
+    assert args == (date(2025, 10, 27), date(2025, 11, 10), date(2026, 11, 10), 5)
+    assert 'previous.`close` > 0' in sql
+    assert 'ORDER BY `return_1y` DESC' in sql
+    assert 'current.`close` > previous.`close`' in sql
+
+
+@pytest.mark.parametrize(('side', 'operator', 'direction'), [('positive', '>', 'DESC'), ('negative', '<', 'ASC')])
+@pytest.mark.parametrize(('period', 'field'), [('day', 'return_1d'), ('five_days', 'return_5d'), ('month', 'return_20d')])
+def test_ranking_filters_and_sorts_by_return_sign(period, field, side, operator, direction):
+    reader = Reader()
+    MarketGoldService(reader).ranking(period=period, side=side, as_of=datetime(2026, 11, 12, tzinfo=UTC))
+    sql, _ = reader.calls[1]
+    assert f'`{field}` {operator} 0' in sql
+    assert f'ORDER BY `{field}` {direction}' in sql
+
+
+def test_year_negative_ranking_filters_losses_and_sorts_ascending():
+    reader = Reader()
+    MarketGoldService(reader).ranking(period='year', side='negative', as_of=datetime(2026, 11, 12, tzinfo=UTC))
+    sql, _ = reader.calls[1]
+    assert 'current.`close` < previous.`close`' in sql
+    assert 'ORDER BY `return_1y` ASC' in sql
+
+
+def test_ranking_rejects_invalid_side():
+    with pytest.raises(ValueError):
+        MarketGoldService(Reader()).ranking(period='year', side='unknown', as_of=datetime.now(UTC))
