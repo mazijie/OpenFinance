@@ -17,6 +17,7 @@ from backend.harness.policy import PolicyGuard
 from backend.harness.store import HarnessStore
 from backend.harness.web import WebResearchService
 from backend.services.finance_service import FinanceService
+from backend.services.market_gold_service import MarketGoldService
 
 
 @dataclass(slots=True)
@@ -65,6 +66,21 @@ class AnnualReportSearchInput(BaseModel):
         return self
 
 
+class MarketScreenInput(BaseModel):
+    trading_date: str | None = Field(default=None, description="交易日 YYYY-MM-DD，默认最近交易日")
+    sort_by: Literal['return_1d', 'return_5d', 'return_20d', 'amount', 'avg_amount_1d', 'avg_amount_5d', 'avg_amount_20d', 'ma_5d', 'ma_20d', 'price_ma_5d_deviation', 'price_ma_20d_deviation', 'volatility_20d_annualized', 'avg_volume_5d', 'volume_ratio_5d'] = 'return_1d'
+    direction: Literal['asc', 'desc'] = 'desc'
+    limit: int = Field(default=20, ge=1, le=100)
+    min_value: float | None = None
+    max_value: float | None = None
+
+
+class StockOverviewInput(BaseModel):
+    symbol: str = Field(min_length=1, max_length=16)
+    query: str = Field(default='近期经营及重要新闻', min_length=1)
+    limit: int = Field(default=5, ge=1, le=20)
+
+
 class ResolveSecurityInput(BaseModel):
     query: str
 
@@ -99,6 +115,29 @@ class ToolRegistry:
         return {tool.name: tool for tool in self.tools}
 
     def _build_tools(self) -> list[BaseTool]:
+        def market_screen(**kwargs: Any) -> str:
+            from datetime import date
+            request = MarketScreenInput.model_validate(kwargs)
+            result = MarketGoldService().screen(as_of=self.context.as_of,
+                trading_date=date.fromisoformat(request.trading_date) if request.trading_date else None,
+                sort_by=request.sort_by, direction=request.direction, limit=request.limit,
+                min_value=request.min_value, max_value=request.max_value)
+            doc = EvidenceDocument(evidence_id=f"market-screen:{self.context.turn_id}:{request.model_dump_json()}",
+                source_type="market", source_id=str(result['trading_date']), title="全市场行情筛选",
+                text=_dump(result), locator=str(result['trading_date']), metadata={"screen": result})
+            return _dump({**result, "documents": [doc.model_dump(mode="json")]})
+
+        def stock_overview(**kwargs: Any) -> str:
+            request = StockOverviewInput.model_validate(kwargs)
+            result = MarketGoldService(evidence_service=self.context.evidence_service).overview(
+                symbol=request.symbol, query=request.query, as_of=self.context.as_of, limit=request.limit)
+            if result['market']:
+                doc = EvidenceDocument(evidence_id=f"market-overview:{request.symbol}:{self.context.as_of.isoformat()}",
+                    source_type="market", source_id=request.symbol, title=f"{request.symbol} 行情概览",
+                    text=_dump(result['market']), metadata={"market": result['market']})
+                result['documents'].insert(0, doc.model_dump(mode="json"))
+            return _dump(result)
+
         def research_search(**kwargs: Any) -> str:
             request = ResearchSearchInput.model_validate(kwargs)
             allowed = PolicyGuard.allowed_sources(self.context.run_kind)
@@ -213,6 +252,10 @@ class ToolRegistry:
             return _dump(page.model_dump(mode="json"))
 
         return [
+            StructuredTool.from_function(func=market_screen, name="market_screen", args_schema=MarketScreenInput,
+                description="按收益、成交额、均线、波动率或成交量筛选和排序全市场股票。历史行情使用当前已知版本。"),
+            StructuredTool.from_function(func=stock_overview, name="stock_overview", args_schema=StockOverviewInput,
+                description="查询单股行情概览及相关新闻、年报证据。"),
             StructuredTool.from_function(
                 func=realtime_quote,
                 name="realtime_quote",

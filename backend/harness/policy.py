@@ -25,7 +25,7 @@ class HarnessBudget:
         }
 
 
-READ_TOOLS = {"research_search", "realtime_quote", "annual_report_search", "resolve_security", "fetch_web_page"}
+READ_TOOLS = {"market_screen", "stock_overview", "research_search", "realtime_quote", "annual_report_search", "resolve_security", "fetch_web_page"}
 WRITE_TOOLS: set[str] = set()
 
 
