@@ -39,15 +39,14 @@ def _post_internal_job(path: str, payload: dict[str, object]) -> dict[str, objec
 
 @dag(
     dag_id="openfinance_news_pipeline",
-    description="Collect Juhe finance news into Bronze and normalize it into Iceberg Silver.",
+    description="Collect Caixin news summaries into Bronze and normalize them into Iceberg Silver.",
     schedule=os.getenv("NEWS_AIRFLOW_SCHEDULE", "*/30 * * * *"),
     start_date=pendulum.datetime(2026, 7, 14, tz="UTC"),
     catchup=False,
     max_active_runs=1,
     default_args={
         "owner": "openfinance",
-        # A retry repeats quota-billed provider requests. Operators can rerun
-        # deliberately after fixing infrastructure, but the DAG must fail closed.
+        # Operators can rerun after fixing infrastructure.
         "retries": 0,
         "retry_delay": timedelta(minutes=5),
     },
@@ -73,7 +72,6 @@ def news_pipeline():
             {
                 "start_time": window["start_time"],
                 "end_time": window["end_time"],
-                "limit": int(os.getenv("NEWS_INGEST_LIMIT", "20")),
             },
         )
 

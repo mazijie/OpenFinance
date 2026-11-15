@@ -194,7 +194,8 @@ class PgVectorNewsStore:
             params.append([symbol.strip().upper()])
 
         query_vector = Vector(query_embedding)
-        params.append(query_vector)
+        # The first vector placeholder appears in SELECT, before WHERE.
+        params.insert(0, query_vector)
         params.append(query_vector)
         params.append(limit)
         sql = f"""

@@ -23,6 +23,45 @@ def test_split_batches_handles_partial_batch() -> None:
     assert module._split_batches(["a", "b", "c", "d", "e"], 2) == [["a", "b"], ["c", "d"], ["e"]]
 
 
+def test_partial_backfill_retries_only_failed_symbols_and_keeps_original(monkeypatch) -> None:
+    module = _load_helpers_module()
+    submitted = []
+    def submit(payload):
+        submitted.append(payload)
+        return payload["symbols"][0]
+    def wait(job):
+        if job == "bad":
+            raise RuntimeError("upstream failed")
+        return {"object_path": "recovered", "daily_bar_count": 3, "processed_symbol_count": 1, "failed_symbols": [], "no_data_symbols": []}
+    monkeypatch.setattr(module, "_submit_a_share_ingestion", submit)
+    monkeypatch.setattr(module, "_wait_for_a_share_ingestion", wait)
+    initial = {"object_path": "original", "daily_bar_count": 10, "processed_symbol_count": 2,
+               "symbol_count": 4, "failed_symbols": ["good", "bad"]}
+    window = {"start_date": "2020-01-01", "end_date": "2026-01-01", "adjustment_type": "qfq", "daily_provider_name": "tencent"}
+    result = module.recover_partial_a_share_ingestion(initial, window, "run:try:1", max_retries=2)
+    assert [p["symbols"] for p in submitted] == [["good"], ["bad"], ["bad"]]
+    assert len({p["idempotency_key"] for p in submitted}) == 3
+    assert all(p["include_trading_calendar"] is False for p in submitted)
+    assert result["object_paths"] == ["original", "recovered"]
+    assert result["daily_bar_count"] == 13 and result["processed_symbol_count"] == 3
+    assert result["failed_symbols"] == ["bad"] and initial["failed_symbols"] == ["good", "bad"]
+
+
+def test_partial_backfill_does_not_treat_empty_recovery_as_success(monkeypatch) -> None:
+    module = _load_helpers_module()
+    monkeypatch.setattr(module, "_submit_a_share_ingestion", lambda payload: "job")
+    monkeypatch.setattr(module, "_wait_for_a_share_ingestion", lambda _: {
+        "object_path": "empty", "daily_bar_count": 0, "no_data_symbols": ["bad"]
+    })
+    result = module.recover_partial_a_share_ingestion(
+        {"object_path": "original", "daily_bar_count": 1, "failed_symbols": ["bad"]},
+        {"start_date": "2020-01-01", "end_date": "2026-01-01", "adjustment_type": "qfq", "daily_provider_name": "tencent"},
+        "run", max_retries=1,
+    )
+    assert result["failed_symbols"] == ["bad"]
+    assert result["object_paths"] == ["original"]
+
+
 def test_tencent_source_is_preserved_in_both_plans():
     module = _load_helpers_module()
     plan = module.build_universe_plan({"status": "available", "provider": "tencent", "as_of_date": "2026-11-04", "symbols": ["600519.SH"]}, 20)
@@ -42,7 +81,7 @@ def test_split_batches_rejects_non_positive_size() -> None:
 def test_plan_preserves_available_universe_date() -> None:
     module = _load_helpers_module()
     plan = module.build_universe_plan({"status": "available", "as_of_date": "2026-08-20", "symbols": ["000001.SZ", "600519.SH", "300001.SZ"]}, 2)
-    assert plan == {"status": "available", "provider": "tencent", "universe_as_of_date": "2026-08-20", "symbol_count": 3, "batches": [["000001.SZ", "600519.SH"], ["300001.SZ"]]}
+    assert plan == {"status": "available", "provider": "tencent", "universe_as_of_date": "2026-08-20", "symbol_count": 3, "historical_universe_complete": False, "batches": [["000001.SZ", "600519.SH"], ["300001.SZ"]]}
 
 
 def test_plan_handles_already_covered_without_batches() -> None:
@@ -144,6 +183,17 @@ def test_build_normalization_batches_rejects_missing_object_path() -> None:
             [{"object_path": "finance/requests/a.json"}, {}],
             10,
         )
+
+
+def test_build_normalization_batches_includes_backfill_recovery_objects() -> None:
+    module = _load_helpers_module()
+    results = [
+        {"object_path": "original", "object_paths": ["original", "recovered"]},
+        {"object_path": "next"},
+    ]
+    assert module.build_normalization_batches(results, 2) == [["original", "recovered"], ["next"]]
+    with pytest.raises(ValueError, match="unique Bronze object"):
+        module.build_normalization_batches(results + [{"object_path": "original"}], 2)
 
 
 def test_normalization_status_poll_retries_connection_error(monkeypatch) -> None:

@@ -1,15 +1,17 @@
 # 行情流处理学习链路
 
-这条独立链路使用腾讯行情快照，不能还原逐笔成交。窗口数值是每分钟采样的价格统计，不是 K 线。采集时间不是交易所报价时间；腾讯返回的行情时间单独保存。该第三方接口的长期频率、稳定性与盘中时效尚未验证。
+这条链路使用腾讯行情快照，不能还原逐笔成交。窗口数值是每分钟采样的价格统计，不是 K 线。采集时间不是交易所报价时间；腾讯返回的行情时间单独保存。该第三方接口的长期频率、稳定性与盘中时效尚未验证。
 
-使用已有的 `.env` 和主 Compose 文件。以下命令在项目根目录执行：
+实时行情和 Airflow 已包含在默认 Compose 服务中。使用已有的 `.env`，以下命令在项目根目录执行：
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.realtime.yml --profile realtime up -d --build
-docker compose -f docker-compose.yml -f docker-compose.realtime.yml --profile realtime logs -f quote-collector quote-consumer flink-submit
+bash scripts/compose.sh up -d --build
+docker compose logs -f quote-collector quote-consumer flink-submit
 ```
 
-首次启动会运行后端数据库迁移。实时模式读取 PostgreSQL 中最新非空的证券缓存，以每批最多 500 只并发请求；北京时间交易日交易时段按整分钟启动，不允许重叠。日历未知时不访问上游，批次失败按 2、4、8 秒重试。支持沪深京代码映射，北交所仅对一只证券完成非交易时段单次请求验证，当前证券缓存没有北交所证券。交易日历由后端 `/internal/jobs/investment-monitor/trading-day` 提供，需设置与后端一致的 `OPENFINANCE_INTERNAL_API_TOKEN`。页面每 15 秒刷新；后端 `QUOTE_STALE_SECONDS` 默认 300 秒。无法保证第三方接口不会限流；如持续超时或拒绝，应停止采集器。
+首次启动会运行后端数据库迁移。实时模式通过后端刷新腾讯证券名单并保存到 PostgreSQL；刷新失败时使用最近的非空腾讯缓存并记录缓存日期，没有可用缓存则报告失败。采集以每批最多 500 只并发请求；北京时间交易日交易时段按整分钟启动，不允许重叠。日历未知时不访问上游，批次失败按 2、4、8 秒重试。支持沪深京代码映射，北交所仅对一只证券完成非交易时段单次请求验证。交易日历由后端 `/internal/jobs/trading-day` 提供，需设置与后端一致的 `OPENFINANCE_INTERNAL_API_TOKEN`。页面每 15 秒刷新；后端 `QUOTE_STALE_SECONDS` 默认 300 秒。无法保证第三方接口不会限流；如持续超时或拒绝，应停止采集器。
+
+修改 Compose 中的 `CALENDAR_URL` 后，需要重新创建采集器容器才能更新环境变量；单纯 `restart` 不会应用新地址。使用与部署时相同的 Compose `-f` 参数执行 `docker compose up -d --no-deps quote-collector`。如果日志出现旧地址 `/internal/jobs/investment-monitor/trading-day` 的 404，说明运行中的容器仍保留旧配置。修复后，采集器在下一个交易时段的整分钟继续采集，不会自动补回漏采的盘中记录。
 
 Airflow 任务 `openfinance_trading_calendar_sync` 每天北京时间 06:00 使用 BaoStock 的 `query_trade_dates` 查询当天及之后 30 天；每次执行一次查询，手动运行和当天定时运行相互独立。任务校验返回日期连续且包含今天和明天，再保存 Bronze 响应、更新 Silver 日历并回读检查。失败不会将缺失日期当成休市，定时任务不自动重试；可检查 Airflow 日志后手动重跑：
 
@@ -22,7 +24,7 @@ docker exec openfinance-backend python -m backend.ingestion.jobs.sync_trading_ca
 非交易时段或数据源不可用时设置 `QUOTE_MODE=mock`，模拟数据每分钟产生一次，默认包含 600519.SH、000001.SZ，可通过 `QUOTE_SYMBOLS` 设置。页面会显示 `mock` 来源。不要把模拟数据视为市场验证。
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.realtime.yml exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic quotes.raw --from-beginning --max-messages 2
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic quotes.raw --from-beginning --max-messages 2
 ```
 
 服务地址为 `http://localhost:8083`（Flink）和 `http://localhost:8000/api/realtime-quotes?symbol=600519.SH`。页面与问答使用同一个 PostgreSQL 查询服务；问答的截止时间早于现有快照时返回没有更新。股票涨跌分布按采集轮次计算，未完成时页面提示部分行情暂未纳入。上证指数、深证成指和创业板指独立采集并存储，不参与股票统计；接口的 `indices` 返回最近快照及其状态。部署需升级数据库迁移并重新构建行情采集器。
@@ -36,7 +38,7 @@ docker compose -f docker-compose.yml -f docker-compose.realtime.yml exec kafka /
 先查看 API 的 `late_windows`，或查询数据库 `openfinance.realtime_quote_late` 中 `resolved_at IS NULL` 的记录。在 Kafka 原始消息仍可覆盖目标区间时，指定**包含开始、不包含结束**的整分钟时间范围运行：
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.realtime.yml --profile realtime run --rm --no-deps quote-consumer python -m realtime.recompute --start 2026-11-01T09:30:00+08:00 --end 2026-11-01T10:00:00+08:00
+docker compose run --rm --no-deps quote-consumer python -m realtime.recompute --start 2026-11-01T09:30:00+08:00 --end 2026-11-01T10:00:00+08:00
 ```
 
 重算读取 `quotes.raw` 各分区从当前最早位置到启动时捕获的结束位置，按股票与轮次取首条、按采集时间计算，并在数据库事务中写入结果、处理已覆盖的超期记录及登记 Kafka 位置。它不会调用腾讯或修改消费者组位置。在线结果和重算共用数据库锁；重算结果不会被后到的旧结果覆盖，若之后收到不同的在线结果会标为待复核，需在数据到齐后再次重算。Kafka 快照之外的新消息不在这次重算中。
@@ -68,7 +70,13 @@ Kafka 默认保留 24 小时（可通过 `REALTIME_KAFKA_RETENTION_HOURS` 设置
 可停止并重启 `quote-consumer` 观察 Kafka 重放；停止并重启 `flink-taskmanager` 观察作业恢复和 checkpoint。单节点和本地磁盘仅供学习，不能提供高可用保障。
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.realtime.yml --profile realtime stop quote-collector quote-consumer flink-submit flink-taskmanager flink-jobmanager kafka
+docker compose stop quote-collector quote-consumer flink-submit flink-taskmanager flink-jobmanager kafka
 ```
 
 Kafka 数据和 checkpoint 使用命名卷保留。作业拓扑修改后可能需要手动取消旧作业并重新提交；重复提交会产生多个作业。
+
+### 当日分时缺口补录
+
+分时数据仅通过独立运维页面 `/ops` 手动补录。可指定当日证券或为全市场启动一批（最多 10 只）。先尝试从 Kafka 恢复原始采样，再查询腾讯当天分时；腾讯数据独立保存，同一分钟优先使用本地采样，行情页面不展示补录标识。任务及请求间隔持久化，腾讯请求间隔至少 30 秒；服务重启后中断未完成任务，不会自动重试或处理旧队列。腾讯返回 429、501 或 WAF 页面时立即停止本批次并暂停到下一个北京时间 09:30；暂停期过后也需要手动发起新任务。停牌、无成交或上游未提供数据的分钟保持缺口。
+
+运维页面沿用项目现有访问方式，没有额外口令；请仅在可信环境提供访问。上线前需升级数据库并重建后端和补录服务；日志可通过 `docker compose logs -f quote-backfill` 查看。

@@ -1,4 +1,4 @@
-"""Alembic environment for monitor control-plane tables."""
+"""Alembic database migration environment."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from backend.config import settings
-from backend.monitoring.db_schema import MONITOR_METADATA
 
 config = context.config
 if config.config_file_name is not None:
@@ -17,7 +16,7 @@ if config.config_file_name is not None:
 if settings.DATABASE_URL:
     config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
-target_metadata = MONITOR_METADATA
+target_metadata = None
 
 
 def run_migrations_offline() -> None:

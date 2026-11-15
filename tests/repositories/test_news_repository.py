@@ -10,8 +10,12 @@ class FakeWriter:
     def __init__(self, records: list[NewsArticleRecord]) -> None:
         self._records = records
 
-    def scan_records(self) -> list[NewsArticleRecord]:
-        return self._records
+    def scan_records(self, *, start_at, end_at) -> list[NewsArticleRecord]:
+        return [r for r in self._records if start_at <= r.published_at <= end_at]
+
+    def news_page(self, *, page, page_size):
+        records = sorted(self._records, key=lambda r: (r.published_at, r.ingested_at), reverse=True)
+        return records[(page - 1) * page_size:page * page_size], len(records)
 
 
 def test_search_news_by_symbol_and_date() -> None:

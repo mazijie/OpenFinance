@@ -69,6 +69,7 @@ def aggregate_articles(hits: list[RagSearchHit], *, now: datetime | None = None)
                 published_at=primary.published_at,
                 url=primary.url,
                 final_score=final_score,
+                metadata={"content_type": "summary"} if primary.provider == "caixin" and not primary.content else {},
                 evidence_chunks=evidence,
             )
         )

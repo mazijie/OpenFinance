@@ -17,7 +17,8 @@ def build_citation_context(articles: list[RagArticleResult]) -> str:
         evidence = "\n".join(f"- {item.chunk_text}" for item in article.evidence_chunks)
         sections.append(
             f"[{article.citation_id}] 标题：{article.title}\n来源：{article.source_name or article.provider}\n"
-            f"发布时间：{article.published_at.isoformat()}\nURL：{article.url}\n证据：\n{evidence}"
+            f"发布时间：{article.published_at.isoformat()}\nURL：{article.url}\n"
+            f"{'内容类型：新闻摘要' if article.metadata.get('content_type') == 'summary' else '内容类型：新闻正文'}\n证据：\n{evidence}"
         )
     return "\n\n".join(sections)
 

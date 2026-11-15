@@ -122,7 +122,7 @@ class MarketQueryParams(BaseModel):
     security_id: str | None = None
     start_date: date
     end_date: date
-    adjustment_type: str = "qfq"
+    adjustment_type: Literal["none"] = "none"
     as_of: datetime | None = None
     limit: int = Field(default=500, ge=1, le=5000)
 
@@ -233,4 +233,4 @@ class Pagination(BaseModel):
         )
 
 
-AdjustmentType = Literal["none", "qfq", "hfq", "forward", "backward"]
+AdjustmentType = Literal["none"]

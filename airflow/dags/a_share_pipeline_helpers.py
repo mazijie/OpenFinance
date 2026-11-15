@@ -95,6 +95,51 @@ def _wait_for_a_share_ingestion(job_id: str) -> dict[str, object]:
     )
 
 
+def recover_partial_a_share_ingestion(
+    result: dict[str, object], window: dict[str, str], idempotency_key: str,
+    *, max_retries: int = 2,
+) -> dict[str, object]:
+    """Retry failed symbols while retaining original and recovered Bronze objects."""
+    combined = dict(result)
+    paths = [str(result["object_path"])]
+    pending = list(dict.fromkeys(str(s) for s in result.get("failed_symbols", [])))
+    if pending:
+        print(f"A-share ingestion partially failed: {len(pending)} symbols: {pending}")
+    for retry in range(1, max_retries + 1):
+        if not pending:
+            break
+        remaining = []
+        for symbol in pending:
+            payload = {
+                "symbols": [symbol],
+                "start_date": f"{window['start_date']}T00:00:00+00:00",
+                "end_date": f"{window['end_date']}T00:00:00+00:00",
+                "adjustment_type": window["adjustment_type"],
+                "daily_provider_name": window["daily_provider_name"],
+                "include_trading_calendar": False,
+                "idempotency_key": f"{idempotency_key}:recover:{symbol}:{retry}",
+            }
+            try:
+                recovery = _wait_for_a_share_ingestion(_submit_a_share_ingestion(payload))
+            except (RuntimeError, TimeoutError) as exc:
+                print(f"A-share recovery failed for {symbol}, attempt {retry}: {exc}")
+                remaining.append(symbol)
+                continue
+            if recovery.get("failed_symbols") or recovery.get("no_data_symbols") or int(recovery.get("daily_bar_count", 0)) <= 0:
+                print(f"A-share recovery returned no usable bars for {symbol}, attempt {retry}")
+                remaining.append(symbol)
+                continue
+            paths.append(str(recovery["object_path"]))
+            combined["daily_bar_count"] = int(combined.get("daily_bar_count", 0)) + int(recovery["daily_bar_count"])
+            combined["processed_symbol_count"] = int(combined.get("processed_symbol_count", 0)) + int(recovery.get("processed_symbol_count", 0))
+        pending = remaining
+    combined["object_paths"] = list(dict.fromkeys(paths))
+    combined["failed_symbols"] = pending
+    if pending:
+        print(f"ERROR: A-share recovery exhausted; unresolved symbols: {pending}")
+    return combined
+
+
 def _submit_finance_normalization(payload: dict[str, object]) -> str:
     response = _post_internal_job("/internal/jobs/finance-bronze-to-silver/submit", payload)
     job_id = str(response.get("job_id") or "").strip()
@@ -179,6 +224,7 @@ def build_universe_plan(payload: dict[str, object], batch_size: int) -> dict[str
         "status": status,
         "universe_as_of_date": as_of_date,
         "provider": str(payload.get("provider") or os.getenv("FINANCE_DAILY_PROVIDER", "tencent")),
+        "historical_universe_complete": bool(payload.get("historical_universe_complete", False)),
         "symbol_count": len(symbols),
         "batches": _split_batches(symbols, batch_size) if status == "available" else [],
     }
@@ -228,13 +274,16 @@ def build_normalization_batches(
 
     if batch_size <= 0:
         raise ValueError("A_SHARE_NORMALIZATION_BATCH_SIZE must be positive")
-    paths = [
-        str(item["object_path"])
-        for item in ingest_results
-        if str(item.get("object_path") or "").strip()
-    ]
+    paths = []
+    for item in ingest_results:
+        object_paths = item.get("object_paths") or [item.get("object_path")]
+        if not isinstance(object_paths, list) or not object_paths or any(
+            not str(path or "").strip() for path in object_paths
+        ):
+            raise ValueError("Every successful ingestion batch must have one unique Bronze object or more")
+        paths.extend(str(path).strip() for path in object_paths)
     unique_paths = list(dict.fromkeys(paths))
-    if len(unique_paths) != len(ingest_results):
+    if len(unique_paths) != len(paths):
         raise ValueError("Every successful ingestion batch must have one unique Bronze object")
     return [
         unique_paths[index:index + batch_size]

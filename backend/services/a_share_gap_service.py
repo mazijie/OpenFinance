@@ -11,6 +11,7 @@ from backend.lakehouse.api_request_budget import ApiRequestBudgetStore
 from backend.lakehouse.a_share_universe_cache import AShareUniverseCacheStore
 from backend.lakehouse.finance_writer import FinanceWriter
 from backend.providers.finance import BaoStockFinanceProvider
+from backend.providers.tencent_securities import TencentSecurityProvider
 from backend.providers.daily_bars import daily_request_limit, estimate_daily_requests
 from backend.schemas.finance import SecurityMasterRecord, TradingCalendarRecord
 
@@ -29,12 +30,13 @@ class AShareGapService:
         self.writer = writer or FinanceWriter()
         self.budget_store = budget_store or ApiRequestBudgetStore()
         self.universe_cache = universe_cache or AShareUniverseCacheStore()
-        self.provider = provider or BaoStockFinanceProvider(budget_store=self.budget_store)
+        self.provider = provider or TencentSecurityProvider()
+        self.calendar_provider = provider or BaoStockFinanceProvider(budget_store=self.budget_store)
 
     def plan(
         self,
         *,
-        adjustment_type: str = "qfq",
+        adjustment_type: str = "none",
         lookback_days: int | None = None,
         end_date: date | None = None,
         start_date: date | None = None,
@@ -42,6 +44,8 @@ class AShareGapService:
         mode: str = "daily",
     ) -> dict[str, Any]:
         provider_name = settings.FINANCE_DAILY_PROVIDER
+        if adjustment_type != "none":
+            raise ValueError("Only unadjusted daily bars are supported")
         request_limit = daily_request_limit(provider_name)
         resolved_end = end_date or (datetime.now(ZoneInfo("Asia/Shanghai")).date() - timedelta(days=1))
         while resolved_end.weekday() >= 5:
@@ -58,7 +62,8 @@ class AShareGapService:
         securities = self.writer.scan_security_master()
         security_by_id = {security.security_id: security for security in securities}
         calendar = self.writer.scan_trading_calendar()
-        universe, universe_refresh_requests = self._load_universe("baostock", resolved_end)
+        universe_as_of = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+        universe, universe_refresh_requests = self._load_universe("tencent", universe_as_of)
         if not universe:
             raise ValueError("A-share universe is empty")
         requested_symbols = {symbol.strip().upper() for symbol in symbols or [] if symbol.strip()}
@@ -124,28 +129,20 @@ class AShareGapService:
         missing.sort(key=lambda item: (item["start_date"], -item["missing_date_count"], item["symbol"]))
         remaining_budget = self.budget_store.remaining(provider=provider_name, daily_limit=request_limit) if request_limit > 0 else None
         base_requests_per_symbol = estimate_daily_requests(provider_name, range_start, resolved_end)
-        metadata_budget = self.budget_store.remaining(provider="baostock", daily_limit=settings.BAOSTOCK_DAILY_REQUEST_LIMIT)
-        metadata_requests = 0
         selected: list[dict[str, Any]] = []
         estimated_requests = 0
         for item in missing:
             if len(selected) >= settings.A_SHARE_MAX_SYMBOLS_PER_RUN:
                 break
             item_requests = estimate_daily_requests(provider_name, date.fromisoformat(item["start_date"]), date.fromisoformat(item["end_date"]))
-            if provider_name == "baostock":
-                item_requests += int(item["needs_metadata"])
-            elif item["needs_metadata"]:
-                if metadata_requests >= metadata_budget:
-                    continue
+            item_requests += int(item["needs_metadata"])
             if remaining_budget is not None and estimated_requests + item_requests > remaining_budget:
                 continue
             selected.append(item)
             estimated_requests += item_requests
-            if provider_name != "baostock" and item["needs_metadata"]:
-                metadata_requests += 1
 
         unknown_metadata = [symbol for symbol in expected_symbols if symbol not in security_by_id or security_by_id[symbol].list_date is None]
-        status = "available" if selected else "quota_exhausted" if missing else "metadata_incomplete" if unknown_metadata else "complete"
+        status = "available" if selected else "quota_exhausted" if missing else "partial_metadata" if unknown_metadata else "complete"
         return {
             "status": status,
             "mode": mode,
@@ -156,6 +153,8 @@ class AShareGapService:
             "calendar_refresh_requests": calendar_refreshes,
             "universe_refresh_requests": universe_refresh_requests,
             "universe_symbol_count": len(expected_symbols),
+            "universe_as_of_date": universe_as_of.isoformat(),
+            "historical_universe_complete": False,
             "missing_symbol_count": len(missing),
             "missing_pair_count": missing_pair_count,
             "metadata_incomplete_symbols": unknown_metadata,
@@ -195,7 +194,7 @@ class AShareGapService:
             if not dates or refreshed >= remaining:
                 continue
             try:
-                records = self.provider.fetch_trading_calendar(exchange=exchange, start_date=min(dates), end_date=max(dates))
+                records = self.calendar_provider.fetch_trading_calendar(exchange=exchange, start_date=min(dates), end_date=max(dates))
                 self.writer.append_trading_calendar(records)
                 refreshed += 1
             except Exception:

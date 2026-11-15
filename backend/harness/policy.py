@@ -25,31 +25,8 @@ class HarnessBudget:
         }
 
 
-READ_TOOLS = {
-    "research_search",
-    "realtime_quote",
-    "annual_report_search",
-    "resolve_security",
-    "list_watchlist",
-    "fetch_web_page",
-    "get_monitor_status",
-    "list_monitor_reports",
-    "get_monitor_report",
-}
-
-WRITE_TOOLS = {
-    "add_watchlist_item",
-    "update_watchlist_item",
-    "delete_watchlist_item",
-    "submit_monitor_run",
-}
-
-MONITOR_ALLOWED_TOOLS = {
-    "research_search",
-    "annual_report_search",
-    "resolve_security",
-    "list_watchlist",
-}
+READ_TOOLS = {"market_screen", "stock_overview", "research_search", "realtime_quote", "annual_report_search", "resolve_security", "fetch_web_page"}
+WRITE_TOOLS: set[str] = set()
 
 
 class PolicyGuard:
@@ -135,13 +112,9 @@ class PolicyGuard:
 
     @staticmethod
     def allows(run_kind: str, tool_name: str) -> bool:
-        if run_kind == "monitor":
-            return tool_name in MONITOR_ALLOWED_TOOLS
         return tool_name in READ_TOOLS or tool_name in WRITE_TOOLS
 
     @staticmethod
     def allowed_sources(run_kind: str) -> set[str]:
-        if run_kind == "monitor":
-            return {"market", "news", "annual_report"}
         return {"market", "news", "annual_report", "web"}
 

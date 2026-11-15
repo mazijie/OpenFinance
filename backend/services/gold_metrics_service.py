@@ -1,11 +1,12 @@
-"""Gold-market feature snapshots used by the monitoring workflow."""
+"""Gold-market feature snapshots for market analysis."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 
-from backend.repositories.gold_metrics_repository import GoldMetricsRepository
+from backend.lakehouse.starrocks_daily_reader import StarRocksUnavailable
+from backend.lakehouse.starrocks_readers import StarRocksReader
 from backend.schemas.finance import GoldMetricRecord
 
 
@@ -23,7 +24,7 @@ class GoldMetricSnapshot:
 
 
 class GoldMetricsService:
-    def __init__(self, repository: GoldMetricsRepository | None = None) -> None:
+    def __init__(self, repository: StarRocksReader | None = None) -> None:
         self.repository = repository
 
     def snapshot(
@@ -34,12 +35,14 @@ class GoldMetricsService:
         cutoff_at: datetime,
     ) -> GoldMetricSnapshot:
         try:
-            repository = self.repository or GoldMetricsRepository()
+            repository = self.repository or StarRocksReader()
             rows = repository.scan(
                 symbol=symbol,
                 trading_date=trading_date,
                 cutoff_at=cutoff_at,
             )
+        except StarRocksUnavailable:
+            raise
         except Exception as exc:
             return GoldMetricSnapshot(
                 rows=[],

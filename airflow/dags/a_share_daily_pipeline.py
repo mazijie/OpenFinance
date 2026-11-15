@@ -30,7 +30,7 @@ from a_share_pipeline_helpers import _submit_a_share_ingestion, _submit_finance_
 def a_share_daily_pipeline():
     @task
     def build_window() -> dict[str, object]:
-        adjustment_type = os.getenv("A_SHARE_DAILY_ADJUSTMENT_TYPE", "qfq").strip().lower()
+        adjustment_type = "none"
         plan = _post_internal_job(
             "/internal/jobs/a-share-missing-bars-plan",
             {
@@ -85,9 +85,12 @@ def a_share_daily_pipeline():
 
     @task(retries=0, max_active_tis_per_dag=1)
     def bronze_to_silver(ingest_results: list[dict[str, object]]) -> list[dict[str, int]]:
+        failed_symbols = [symbol for item in ingest_results for symbol in item.get("failed_symbols", [])]
+        if failed_symbols:
+            raise ValueError(f"A-share ingestion failed for {len(failed_symbols)} symbols: {failed_symbols}")
         batches = build_normalization_batches(
             ingest_results,
-            int(os.getenv("A_SHARE_NORMALIZATION_BATCH_SIZE", "10")),
+            int(os.getenv("A_SHARE_NORMALIZATION_BATCH_SIZE", "300")),
         )
         return [
             _wait_for_finance_normalization(

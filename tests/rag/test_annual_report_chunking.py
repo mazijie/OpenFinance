@@ -41,3 +41,18 @@ def test_prose_chunk_can_cross_page_boundary_and_retains_all_region_ids():
     assert len(chunks) == 1
     assert (chunks[0].page_start, chunks[0].page_end) == (1, 2)
     assert chunks[0].region_ids == ['p1', 'p2']
+
+
+def test_duplicate_table_fragments_keep_rows_and_have_stable_distinct_ids(monkeypatch):
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, 'RAG_CHUNK_SIZE', 50)
+    monkeypatch.setattr(settings, 'RAG_CHUNK_OVERLAP', 10)
+    rows = [['header'], ['x' * 45], ['x' * 45]]
+    ir = {'pages': [{'page_number': 1, 'regions': [{'region_id': 'table', 'region_type': 'table', 'clean_text': 'table', 'table': {'rows': rows}}]}]}
+    chunks = build_ir_chunks(ir, report_id='report', parse_run_id='run')
+    again = build_ir_chunks(ir, report_id='report', parse_run_id='run')
+    assert len(chunks) == 2
+    assert chunks[0].chunk_text == chunks[1].chunk_text
+    assert chunks[0].chunk_id != chunks[1].chunk_id
+    assert [chunk.chunk_id for chunk in chunks] == [chunk.chunk_id for chunk in again]

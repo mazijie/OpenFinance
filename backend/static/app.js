@@ -3,7 +3,6 @@ const questionInput = document.querySelector("#questionInput");
 const sendButton = document.querySelector("#sendButton");
 const messages = document.querySelector("#messages");
 const chatStatus = document.querySelector("#chatStatus");
-const systemStatus = document.querySelector("#systemStatus");
 const chatThreadTabs = document.querySelector("#chatThreadTabs");
 const newChatThreadButton = document.querySelector("#newChatThreadButton");
 let chatProgress = null;
@@ -15,7 +14,7 @@ const marketForm = document.querySelector("#marketForm");
 const symbolInput = document.querySelector("#symbolInput");
 const securitySearch = document.querySelector("#securitySearch");
 const securityResults = document.querySelector("#securityResults");
-const MARKET_ADJUSTMENT = "qfq";
+const MARKET_ADJUSTMENT = "none";
 const marketMessage = document.querySelector("#marketMessage");
 const stockLastPrice = document.querySelector("#stockLastPrice");
 const stockChangePercent = document.querySelector("#stockChangePercent");
@@ -48,20 +47,6 @@ const reportPageInfo = document.querySelector("#reportPageInfo");
 const prevReportPageButton = document.querySelector("#prevReportPageButton");
 const nextReportPageButton = document.querySelector("#nextReportPageButton");
 const refreshReportsButton = document.querySelector("#refreshReportsButton");
-const refreshWatchlistButton = document.querySelector("#refreshWatchlistButton");
-const watchlistForm = document.querySelector("#watchlistForm");
-const watchlistSymbol = document.querySelector("#watchlistSymbol");
-const priceMoveThreshold = document.querySelector("#priceMoveThreshold");
-const volumeRatioThreshold = document.querySelector("#volumeRatioThreshold");
-const watchlistMessage = document.querySelector("#watchlistMessage");
-const watchlistList = document.querySelector("#watchlistList");
-const runMonitorButton = document.querySelector("#runMonitorButton");
-const refreshMonitorButton = document.querySelector("#refreshMonitorButton");
-const monitorFilterForm = document.querySelector("#monitorFilterForm");
-const monitorTradingDate = document.querySelector("#monitorTradingDate");
-const monitorStatus = document.querySelector("#monitorStatus");
-const monitorMessage = document.querySelector("#monitorMessage");
-const monitorReportList = document.querySelector("#monitorReportList");
 const newAgentThreadButton = document.querySelector("#newAgentThreadButton");
 const agentThreadList = document.querySelector("#agentThreadList");
 const agentThreadTitle = document.querySelector("#agentThreadTitle");
@@ -104,6 +89,10 @@ const state = {
   historyHasMore: false,
   historyLoading: false,
   historyFailed: false,
+  historyChecking: false,
+  historyCheckFailed: false,
+  historyCheckExpired: false,
+  historyAvailability: null,
   historySymbol: null,
   liveQuote: null,
   lastProvisionalDate: null,
@@ -132,16 +121,18 @@ async function loadSecurityOptions() {
     securitySearch.disabled = false;
     securitySearch.placeholder = items.length ? "输入股票名称或代码" : "暂无可用证券";
     symbolInput.innerHTML = items.length
-      ? items.map((item) => `<option value="${escapeHtml(item.symbol)}" data-exchange="${escapeHtml(item.exchange)}">${escapeHtml(item.symbol)} · ${escapeHtml(item.name)} · ${escapeHtml(item.exchange)}</option>`).join("")
+      ? items.map((item) => `<option value="${escapeHtml(item.symbol)}" data-exchange="${escapeHtml(item.exchange)}">${escapeHtml(item.symbol)} · ${escapeHtml(item.name)}</option>`).join("")
       : '<option value="" selected disabled>暂无可用证券</option>';
     if (items.some((item) => item.symbol === "600519.SH")) symbolInput.value = "600519.SH";
     if (items.length) securitySearch.value = `${items[symbolInput.selectedIndex].name} · ${items[symbolInput.selectedIndex].symbol}`;
     if (items.length && marketForm.checkValidity()) loadMarket();
     if (items.length) loadRealtimeQuotes();
+    loadQuickReports();
   } catch (error) {
     console.warn(error.message || "证券列表加载失败");
     symbolInput.innerHTML = '<option value="" selected disabled>证券列表加载失败</option>';
     securitySearch.placeholder = "证券列表加载失败";
+    document.querySelector("#quickReports").textContent = "证券列表加载失败，请稍后重试。";
   }
 }
 
@@ -215,7 +206,7 @@ function requireLlmConfig() {
   if (!config.apiKey) {
     if (modelSettingsDetails) modelSettingsDetails.open = true;
     window.setTimeout(() => llmApiKeyInput.focus(), 0);
-    throw new Error("请先在左侧填写 DeepSeek API Key。");
+    throw new Error("请先在模型设置中填写 DeepSeek API Key。");
   }
   return config;
 }
@@ -232,7 +223,7 @@ function llmHeaders(extra = {}) {
 function renderLlmSettingsStatus() {
   const config = getLlmConfig();
   const ready = Boolean(config.apiKey);
-  modelSettingsStatus.textContent = ready ? `已配置 · ${config.model}` : "未配置 Key";
+  modelSettingsStatus.textContent = ready ? `已配置 · ${config.model}` : "未设置 API Key";
   modelSettingsStatus.classList.toggle("ready", ready);
 }
 
@@ -286,13 +277,11 @@ async function selectAgentThread(threadId) {
 
 function renderAgentMessage(message) {
   const citations = message.citations || [];
-  const report = message.kind === "monitor_report" ? message.payload?.report : null;
   const approval = message.kind === "approval" ? message.payload?.approval : null;
-  const reportHtml = report ? `<div class="agent-monitor-card"><strong>${escapeHtml(report.symbol || "")} ${escapeHtml(report.name || "")} 监测报告</strong><p>${escapeHtml(report.analysis || "无分析文本")}</p></div>` : "";
   const approvalActions = !approval?.status || approval.status === "pending" ? '<div class="approval-actions"><button type="button" class="primary-button" data-decision="approve">批准</button><button type="button" class="secondary-button" data-decision="reject">拒绝</button></div>' : "";
   const approvalHtml = approval ? `<div class="approval-card" data-approval-id="${escapeHtml(approval.approval_id)}"><h4>需要确认：${escapeHtml(approval.tool_name)}</h4><p>${escapeHtml(approval.summary || JSON.stringify(approval.args || {}))}</p>${approvalActions}</div>` : "";
-  const citationHtml = citations.length ? `<details class="agent-citations"><summary>来源与引用（${citations.length}）</summary><ol>${citations.map((citation) => `<li>[${citation.citation_id}] ${citation.url ? `<a href="${escapeHtml(citation.url)}" target="_blank" rel="noreferrer">${escapeHtml(citation.title)}</a>` : escapeHtml(citation.title)}${citation.locator ? ` · ${escapeHtml(citation.locator)}` : ""}</li>`).join("")}</ol></details>` : "";
-  return `<article class="agent-message ${escapeHtml(message.role)} ${escapeHtml(message.kind)}"><div class="agent-bubble">${escapeHtml(message.content)}${reportHtml}${approvalHtml}${citationHtml}</div></article>`;
+  const citationHtml = citations.length ? `<details class="agent-citations"><summary>来源与引用（${citations.length}）</summary><ol>${citations.map((citation) => `<li>[${citation.citation_id}] ${citation.url ? `<a href="${escapeHtml(citation.url)}" target="_blank" rel="noreferrer">${escapeHtml(citation.title)}</a>` : escapeHtml(citation.title)}${citation.content_type === "summary" ? " · 摘要" : ""}${citation.locator ? ` · ${escapeHtml(citation.locator)}` : ""}</li>`).join("")}</ol></details>` : "";
+  return `<article class="agent-message ${escapeHtml(message.role)} ${escapeHtml(message.kind)}"><div class="agent-bubble">${escapeHtml(message.content)}${approvalHtml}${citationHtml}</div></article>`;
 }
 
 async function loadAgentMessages() {
@@ -418,8 +407,6 @@ async function consumeAgentEvents(response, resume = false) {
       agentMessages.scrollTop = agentMessages.scrollHeight;
     } else if (type === "message.completed" && streamingBubble) {
       streamingBubble.parentElement?.classList.remove("streaming");
-    } else if (type === "monitor.queued") {
-      setAgentActivity("监测任务已提交", "done");
     } else if (type === "turn.failed") {
       addAgentSystemMessage(payload.error || "Agent 运行失败");
     } else if (type === "turn.cancelled") {
@@ -480,11 +467,6 @@ function setMarketMessage(message, kind = "info") {
   marketMessage.hidden = !message;
 }
 
-function setMonitorMessage(element, message, kind = "info") {
-  element.textContent = message;
-  element.className = `monitor-message ${kind}`;
-}
-
 function setLoading(isLoading) {
   if (isLoading) {
     marketSourceBadge.textContent = "正在查询";
@@ -513,7 +495,7 @@ function renderChart(summary, viewport = null) {
     tooltip: { trigger: "axis", axisPointer: { type: "cross" }, backgroundColor: "rgba(20, 31, 49, .94)", borderWidth: 0, textStyle: { color: "#fff" }, formatter: (params) => {
       const index = params[0]?.dataIndex ?? 0;
       const bar = bars[index];
-      const flags = [bar.is_suspended ? "停牌" : "", bar.is_st ? "ST" : "", bar.provisional ? "临时行情" : ""].filter(Boolean).join(" / ");
+      const flags = [bar.is_suspended ? "停牌" : "", bar.is_st ? "ST" : ""].filter(Boolean).join(" / ");
       return `<strong>${escapeHtml(formatDate(bar.trading_date))}</strong><br/>开盘 ${formatNumber(bar.open)}　${bar.provisional ? "最新" : "收盘"} ${formatNumber(bar.close)}<br/>最高 ${formatNumber(bar.high)}　最低 ${formatNumber(bar.low)}<br/>成交量 ${bar.volume == null ? "暂无" : formatNumber(bar.volume, 0)}${flags ? `<br/>${escapeHtml(flags)}` : ""}`;
     } },
     axisPointer: { link: [{ xAxisIndex: "all" }] },
@@ -607,7 +589,6 @@ function renderHistoryChart(viewport = null) {
   const bars = aggregateBars(daily, state.marketPeriod);
   renderChart({ bars }, viewport);
   if (daily.some((bar) => bar.provisional)) {
-    chartSubtitle.textContent += " · 含临时行情";
     const previous = state.historyBars.at(-1)?.trading_date;
     const last = daily.at(-1).trading_date;
     if (!previous) chartSubtitle.textContent += " · 暂无历史行情";
@@ -619,7 +600,7 @@ function renderSelectedPeriod() {
   const period = state.marketPeriod;
   const intraday = period === "intraday";
   historyStatus.hidden = intraday;
-  loadOlderButton.hidden = intraday || !state.historyHasMore;
+  loadOlderButton.hidden = intraday || (!state.historyHasMore && !state.historyCheckFailed);
   if (intraday) { loadIntraday(); return; }
   ++state.intradayRequestId;
   renderHistoryChart();
@@ -650,7 +631,7 @@ async function loadIntraday() {
     if (!series.length) { chartEmpty.hidden = false; chartEmpty.textContent = "暂无交易时段内的分时数据"; return; }
     const previousClose = intradayPreviousClose(state.liveQuote?.previous_close);
     const firstPoint = series.find((point) => point.time);
-    chartSubtitle.textContent = `${formatRealtimeTime(firstPoint.time).split(' ')[0]} · 分时走势${points.some((point) => point.incomplete) ? " · 部分数据待更新" : ""}`;
+    chartSubtitle.textContent = `${formatRealtimeTime(firstPoint.time).split(' ')[0]} · 分时走势${points.some((point) => point.incomplete) ? " · 部分行情数据不完整" : ""}`;
     state.chart.setOption({ animation: false, tooltip: { trigger: "axis", formatter: (params) => {
       const item = params.find((entry) => entry.data?.time);
       if (!item) return "";
@@ -678,7 +659,7 @@ function intradaySeries(points) {
     if (x == null || point.price == null) continue;
     const previous = result.at(-1);
     if (previous?.time && x - previous.value[0] > 1 + 1e-6) result.push({ value: [x, null], time: null });
-    result.push({ value: [x, Number(point.price)], time: point.time });
+    result.push({ value: [x, Number(point.price)], time: point.time, source: point.source });
   }
   return result;
 }
@@ -703,6 +684,10 @@ async function loadMarket() {
   state.historyHasMore = false;
   state.historyLoading = false;
   state.historyFailed = false;
+  state.historyChecking = false;
+  state.historyCheckFailed = false;
+  state.historyCheckExpired = false;
+  state.historyAvailability = null;
   state.historyReady = false;
   state.lastProvisionalDate = null;
   state.lastReconcileAt = 0;
@@ -729,12 +714,15 @@ async function loadHistoryPage(requestId, older) {
   loadOlderButton.hidden = true;
   const params = new URLSearchParams({ symbol: state.historySymbol, period: state.marketPeriod, adjustment_type: MARKET_ADJUSTMENT });
   if (older) params.set("before", state.historyBefore);
+  let timedOut = false;
+  const controller = state.marketAbortController;
+  const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 60000);
   try {
     let response = await fetch(`/api/market/history?${params.toString()}`, { signal: state.marketAbortController.signal });
     let payload = await response.json().catch(() => ({}));
     if (requestId !== state.marketRequestId) return;
     if (!response.ok) throw new Error(payload.detail || `行情查询失败（${response.status}）`);
-    if (!older && !payload.items?.length && !payload.has_more && state.historySymbol !== symbolInput.value.trim()) {
+    if (!older && !payload.items?.length && payload.has_more === false && state.historySymbol !== symbolInput.value.trim()) {
       params.set("symbol", symbolInput.value.trim());
       response = await fetch(`/api/market/history?${params.toString()}`, { signal: state.marketAbortController.signal });
       payload = await response.json().catch(() => ({}));
@@ -751,7 +739,7 @@ async function loadHistoryPage(requestId, older) {
     for (const bar of summary?.bars || []) if (!merged.has(bar.trading_date)) merged.set(bar.trading_date, bar);
     state.historyBars = [...merged.values()].sort((a, b) => a.trading_date.localeCompare(b.trading_date));
     state.historyBefore = payload.next_before;
-    state.historyHasMore = payload.has_more;
+    state.historyHasMore = payload.has_more === true;
     if (!older && summary) {
       state.marketSummary = summary;
       marketSourceBadge.textContent = `${summary.symbol} · ${summary.exchange}`;
@@ -759,19 +747,76 @@ async function loadHistoryPage(requestId, older) {
     state.historyReady = true;
     if (!older) state.lastReconcileAt = Date.now();
     renderHistoryChart(viewport);
-    historyStatus.textContent = payload.has_more ? "向左拖动查看更早行情" : "已到最早可用行情";
-    loadOlderButton.hidden = !payload.has_more;
+    state.historyAvailability = payload.has_more === null ? {
+      symbol: state.historySymbol, period: state.marketPeriod, before: payload.next_before, snapshot_id: payload.snapshot_id,
+      table_uuid: payload.table_uuid, query_time: payload.query_time,
+      initialEmpty: !older && !summary,
+    } : null;
+    state.historyCheckFailed = false;
+    state.historyCheckExpired = false;
+    historyStatus.textContent = payload.has_more === null ? "正在检查更早行情…" : payload.has_more ? "向左拖动查看更早行情" : "已到最早可用行情";
+    loadOlderButton.hidden = payload.has_more !== true;
     loadOlderButton.textContent = "加载更早行情";
     setMarketMessage("");
+    if (state.historyAvailability) checkHistoryAvailability(requestId, state.historyAvailability);
   } catch (error) {
-    if (error.name === "AbortError" || requestId !== state.marketRequestId) return;
+    if ((error.name === "AbortError" && !timedOut) || requestId !== state.marketRequestId) return;
     state.historyFailed = true;
     historyStatus.textContent = "行情加载失败，请重试";
     loadOlderButton.hidden = false;
     loadOlderButton.textContent = "重试";
-    if (!older) { marketSourceBadge.textContent = "查询失败"; setMarketMessage(error.message || "行情查询失败，请稍后重试。", "error"); }
+    if (!older) { marketSourceBadge.textContent = "查询失败"; setMarketMessage(timedOut ? "行情查询超时，请稍后重试。" : (error.message || "行情查询失败，请稍后重试。"), "error"); }
   } finally {
+    clearTimeout(timeout);
     if (requestId === state.marketRequestId) { state.historyLoading = false; setLoading(false); }
+  }
+}
+
+async function checkHistoryAvailability(requestId, context) {
+  if (state.historyChecking) return;
+  state.historyChecking = true;
+  state.historyCheckFailed = false;
+  historyStatus.textContent = "正在检查更早行情…";
+  loadOlderButton.hidden = true;
+  const controller = new AbortController();
+  const parent = state.marketAbortController.signal;
+  const abort = () => controller.abort();
+  parent.addEventListener("abort", abort, { once: true });
+  const timeout = setTimeout(abort, 60000);
+  try {
+    const params = new URLSearchParams({ symbol: context.symbol, before: context.before,
+      adjustment_type: MARKET_ADJUSTMENT, period: context.period, snapshot_id: context.snapshot_id,
+      table_uuid: context.table_uuid, query_time: context.query_time });
+    const response = await fetch(`/api/market/history/availability?${params}`, { signal: controller.signal });
+    if (!response.ok) {
+      const error = new Error(`HTTP ${response.status}`);
+      error.snapshotExpired = response.status === 410;
+      throw error;
+    }
+    const payload = await response.json();
+    if (requestId !== state.marketRequestId || state.historyAvailability !== context) return;
+    state.historyHasMore = payload.has_more === true;
+    state.historyAvailability = null;
+    if (context.initialEmpty && !state.historyHasMore && context.symbol !== symbolInput.value.trim()) {
+      state.historySymbol = symbolInput.value.trim();
+      state.historyChecking = false;
+      await loadHistoryPage(requestId, false);
+      return;
+    }
+    historyStatus.textContent = state.historyHasMore ? "向左拖动查看更早行情" : "已到最早可用行情";
+    loadOlderButton.hidden = !state.historyHasMore;
+    loadOlderButton.textContent = "加载更早行情";
+  } catch (error) {
+    if (requestId !== state.marketRequestId || parent.aborted || state.historyAvailability !== context) return;
+    state.historyCheckFailed = true;
+    state.historyCheckExpired = Boolean(error.snapshotExpired);
+    historyStatus.textContent = state.historyCheckExpired ? "行情数据已更新，请重新加载" : "检查更早行情失败，请重试";
+    loadOlderButton.hidden = false;
+    loadOlderButton.textContent = state.historyCheckExpired ? "重新加载" : "重试检查";
+  } finally {
+    clearTimeout(timeout);
+    parent.removeEventListener("abort", abort);
+    if (requestId === state.marketRequestId && (!state.historyAvailability || state.historyAvailability === context)) state.historyChecking = false;
   }
 }
 
@@ -922,7 +967,7 @@ function buildHistoricalProgress(events) {
 function renderChatHistory(history, events = []) {
   messages.innerHTML = "";
   if (!history.length) {
-    messages.innerHTML = '<div class="empty-state">这个对话还没有消息，直接提问即可。</div>';
+    addMessage("assistant", "你好！你可以问我股票行情、财经新闻和公司年报相关的问题。例如：贵州茅台最近一个月的行情如何？");
     return;
   }
   const eventsByTurn = new Map();
@@ -1127,7 +1172,7 @@ function resetChatProgress() {
   chatProgressTitle = title;
   chatProgressList = list;
   chatElapsed = elapsed;
-  chatProgressTitle.textContent = "正在建立研究任务";
+  chatProgressTitle.textContent = "正在准备回答";
   startChatProgressTimer();
 }
 
@@ -1192,9 +1237,6 @@ function describeChatTool(payload) {
   if (payload.tool_name === "resolve_security") {
     return { label: "解析证券代码", detail: args.query ? String(args.query) : "" };
   }
-  if (payload.tool_name === "list_watchlist") {
-    return { label: "读取监护清单", detail: "" };
-  }
   return {
     label: `执行工具 ${payload.tool_name || "未知"}`,
     detail: "",
@@ -1211,6 +1253,7 @@ function appendChatCitations(bubble, citations) {
   citations.forEach((citation) => {
     const item = document.createElement("li");
     item.textContent = `[${citation.citation_id}] ${citation.title || citation.source_type || "证据"}`;
+    if (citation.content_type === "summary") item.textContent += " · 摘要";
     if (citation.locator) item.textContent += ` · ${citation.locator}`;
     list.appendChild(item);
   });
@@ -1251,9 +1294,9 @@ async function sendQuestion(question) {
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload.detail || `请求失败（${response.status}）`);
     }
-    const connectedItem = appendChatProgress("研究任务已建立", "开始规划需要调用的数据和工具");
+    const connectedItem = appendChatProgress("已准备回答", "正在确定需要的资料");
     finishChatProgressItem(connectedItem);
-    setChatProgressTitle("模型正在规划研究步骤");
+    setChatProgressTitle("正在查找相关资料");
     maybeRenameActiveChatThread(question);
 
     await parseSSEStream(response, (event) => {
@@ -1308,7 +1351,7 @@ async function sendQuestion(question) {
           answerBubble.className = "bubble";
           article.appendChild(answerBubble);
           messages.appendChild(article);
-          generatingItem = appendChatProgress("生成研究结论", "基于已取得的证据组织回答");
+          generatingItem = appendChatProgress("正在整理回答", "根据已取得的资料组织回答");
         }
         setChatProgressTitle("正在生成回答");
         answerText += payload.text || "";
@@ -1324,7 +1367,7 @@ async function sendQuestion(question) {
         setChatProgressTitle("分析完成");
       } else if (type === "turn.failed") {
         terminalEvent = "failed";
-        streamError = payload.error || "Agent 运行失败";
+        streamError = payload.error || "回答失败，请重试";
         appendChatProgress("运行失败", streamError, "error");
         setChatProgressTitle("分析失败");
       } else if (type === "turn.cancelled") {
@@ -1350,7 +1393,7 @@ async function sendQuestion(question) {
         appendChatCitations(answerBubble, citations);
       }
     }
-    if (!answerText) addMessage("assistant", "Agent 未生成回答。");
+    if (!answerText) addMessage("assistant", "暂时无法生成回答，请重试。");
     const totalTime = formatChatElapsed();
     stopChatProgressTimer();
     if (chatElapsed) chatElapsed.textContent = totalTime;
@@ -1378,12 +1421,48 @@ function formatNewsExcerpt(item, maxLength = 180) {
   return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text;
 }
 
+function renderQuickNews(items) {
+  const container = document.querySelector("#quickNews");
+  if (!items.length) { container.textContent = "暂无最新新闻。"; return; }
+  container.innerHTML = items.slice(0, 3).map((item) => {
+    const title = escapeHtml(item.title || "未命名新闻");
+    const url = /^https?:\/\//i.test(item.url || "") ? item.url : "";
+    const heading = url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${title}</a>` : title;
+    return `<article class="quick-item"><div class="quick-item-title">${heading}</div><small>${escapeHtml(item.source_name || item.provider || "未知来源")} · ${escapeHtml(formatDateTime(item.published_at))}</small></article>`;
+  }).join("");
+}
+
+let quickReportsRequestId = 0;
+async function loadQuickReports() {
+  const id = ++quickReportsRequestId;
+  const symbol = symbolInput.value;
+  const container = document.querySelector("#quickReports");
+  const context = document.querySelector("#quickReportsSymbol");
+  const item = state.securities.find((security) => security.symbol === symbol);
+  context.textContent = item ? `${item.name} · ${symbol}` : "请选择证券";
+  if (!symbol) { container.textContent = "选择证券后查看年报。"; return; }
+  container.textContent = "正在加载年报…";
+  try {
+    // Annual-report records store the six-digit code without the exchange suffix.
+    const stockCode = symbol.split(".")[0];
+    const params = new URLSearchParams({ stock_code: stockCode, page: "1", page_size: "3" });
+    const response = await fetch(`/api/reports?${params}`);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error("年报加载失败，请稍后重试。");
+    if (id !== quickReportsRequestId) return;
+    const reports = payload.items || [];
+    container.innerHTML = reports.length ? reports.map((report) => `<article class="quick-item"><div class="quick-item-title"><a href="/api/reports/${encodeURIComponent(report.report_id)}/download" target="_blank" rel="noopener noreferrer">${escapeHtml(report.title)}</a></div><small>${escapeHtml(String(report.report_year))} 年报 · ${escapeHtml(formatDateTime(report.announcement_time))}</small></article>`).join("") : '<p class="quick-empty">暂无该证券的年报。</p>';
+  } catch (error) {
+    if (id === quickReportsRequestId) container.textContent = "年报加载失败，请稍后重试。";
+  }
+}
+
 function renderNewsItems(items) {
   if (!items.length) { newsList.innerHTML = '<div class="empty-state">当前暂无可展示的新闻。</div>'; return; }
   newsList.innerHTML = items.map((item) => {
     const tags = [...(item.symbols || []), ...(item.entities || []).slice(0, 3)].map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("");
     const href = item.url ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.title)}</a>` : escapeHtml(item.title);
-    return `<article class="news-card"><h3>${href}</h3><p>${escapeHtml(formatNewsExcerpt(item))}</p><div class="news-time"><span>${escapeHtml(item.source_name || item.provider || "未知来源")}</span><span>${escapeHtml(formatDateTime(item.published_at))}</span></div><div class="news-tags">${tags}</div></article>`;
+    return `<article class="news-card"><h3>${href}</h3><p>${item.provider === "caixin" && !item.content ? "摘要：" : ""}${escapeHtml(formatNewsExcerpt(item))}</p><div class="news-time"><span>${escapeHtml(item.source_name || item.provider || "未知来源")}</span><span>${escapeHtml(formatDateTime(item.published_at))}</span></div><div class="news-tags">${tags}</div></article>`;
   }).join("");
 }
 
@@ -1396,6 +1475,7 @@ async function loadNews() {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.detail || `新闻加载失败（${response.status}）`);
     renderNewsItems(payload.items || []);
+    if (state.newsPage === 1) renderQuickNews(payload.items || []);
     newsSummary.textContent = `共 ${payload.total || 0} 条新闻`;
     pageInfo.textContent = `第 ${payload.page || state.newsPage} / ${payload.total_pages || 1} 页`;
     prevPageButton.disabled = (payload.page || state.newsPage) <= 1;
@@ -1403,26 +1483,26 @@ async function loadNews() {
   } catch (error) {
     newsList.innerHTML = `<div class="empty-state">${escapeHtml(error.message || "新闻加载失败")}</div>`;
     newsSummary.textContent = "加载失败";
+    if (state.newsPage === 1) document.querySelector("#quickNews").textContent = "新闻加载失败，请稍后重试。";
     nextPageButton.disabled = true;
   } finally { refreshNewsButton.disabled = false; }
 }
 
 function renderReports(items) {
   if (!items.length) {
-    reportList.innerHTML = '<div class="empty-state">当前筛选条件下没有可展示的年报。</div>';
+    reportList.innerHTML = '<div class="empty-state">没有找到符合条件的年报，请调整筛选条件。</div>';
     return;
   }
   const extractionStatusLabel = {
-    pending_parse: "PDF可用 · 待解析",
-    needs_review: "PDF可用 · 需复核",
-    ok: "文本可用",
+    pending_parse: "PDF 可查看 · 文本待处理",
+    needs_review: "PDF 可查看 · 文本待复核",
+    ok: "PDF 可查看 · 文本已提取",
   };
   reportList.innerHTML = items.map((report) => `
     <article class="report-card" data-report-id="${escapeHtml(report.report_id)}">
       <h3>${escapeHtml(report.title)}</h3>
       <div class="report-meta"><span>${escapeHtml(report.stock_code)} · ${escapeHtml(report.company_name || "公司名称未知")}</span><span>${escapeHtml(String(report.report_year))} 年报</span><span>${escapeHtml(formatDateTime(report.announcement_time))}</span><span>${escapeHtml(extractionStatusLabel[report.extraction_status] || report.extraction_status || "未知状态")}</span></div>
-      <div class="report-actions"><a href="/api/reports/${encodeURIComponent(report.report_id)}/download" target="_blank" rel="noreferrer">打开 PDF</a>${report.page_count > 0 ? '<button type="button" data-action="read-page">查看首页文本</button>' : '<span class="muted-text">文本提取完成后可查看</span>'}</div>
-      <div class="report-page-text" hidden></div>
+      <div class="report-actions"><a href="/api/reports/${encodeURIComponent(report.report_id)}/download" target="_blank" rel="noreferrer">打开 PDF</a></div>
     </article>`).join("");
 }
 
@@ -1435,135 +1515,20 @@ async function loadReports() {
     if (reportYear.value) params.set("report_year", reportYear.value);
     const response = await fetch(`/api/reports?${params.toString()}`);
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.detail || `财报加载失败（${response.status}）`);
+    if (!response.ok) throw new Error(payload.detail || `年报加载失败（${response.status}）`);
     renderReports(payload.items || []);
     reportSummary.textContent = `共 ${payload.total || 0} 份年报`;
     reportPageInfo.textContent = `第 ${payload.page || state.reportPage} 页`;
     prevReportPageButton.disabled = (payload.page || state.reportPage) <= 1;
     nextReportPageButton.disabled = !payload.has_next;
   } catch (error) {
-    reportList.innerHTML = `<div class="empty-state">${escapeHtml(error.message || "财报加载失败")}</div>`;
+    reportList.innerHTML = `<div class="empty-state">${escapeHtml(error.message || "年报加载失败")}</div>`;
     reportSummary.textContent = "加载失败";
     prevReportPageButton.disabled = true;
     nextReportPageButton.disabled = true;
   } finally {
     refreshReportsButton.disabled = false;
   }
-}
-
-async function showReportPage(button) {
-  const card = button.closest(".report-card");
-  const textBox = card.querySelector(".report-page-text");
-  if (!textBox.hidden) {
-    textBox.hidden = true;
-    button.textContent = "查看首页文本";
-    return;
-  }
-  button.disabled = true;
-  button.textContent = "读取中…";
-  try {
-    const reportId = card.dataset.reportId;
-    const response = await fetch(`/api/reports/${encodeURIComponent(reportId)}/pages/1`);
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.detail || "年报文本读取失败");
-    textBox.textContent = payload.text || "该页没有可提取的文本。";
-    textBox.hidden = false;
-    button.textContent = "收起首页文本";
-  } catch (error) {
-    textBox.textContent = error.message || "年报文本读取失败";
-    textBox.hidden = false;
-    button.textContent = "收起提示";
-  } finally {
-    button.disabled = false;
-  }
-}
-
-function renderWatchlist(items) {
-  if (!items.length) {
-    watchlistList.innerHTML = '<div class="empty-state">监护清单为空。加入一只 A 股后即可生成收盘后日报。</div>';
-    return;
-  }
-  watchlistList.innerHTML = items.map((item) => `
-    <article class="watchlist-card ${item.enabled ? "" : "is-disabled"}" data-symbol="${escapeHtml(item.symbol)}">
-      <div class="watchlist-title"><div><strong>${escapeHtml(item.symbol)}</strong><span>${escapeHtml(item.name)}</span></div><span class="status-pill">${item.enabled ? "已启用" : "已暂停"}</span></div>
-      <div class="watchlist-meta"><span>${escapeHtml(item.exchange)}</span><span>涨跌 ${formatPercent(item.thresholds.price_move)}</span><span>量能 ${formatNumber(item.thresholds.volume_ratio)}x</span><span>v${escapeHtml(item.version)}</span></div>
-      ${item.note ? `<p>${escapeHtml(item.note)}</p>` : ""}
-      <div class="watchlist-actions"><button type="button" data-action="edit">编辑阈值</button><button type="button" data-action="toggle">${item.enabled ? "暂停" : "启用"}</button><button type="button" data-action="delete">移除</button></div>
-    </article>`).join("");
-}
-
-async function loadWatchlist() {
-  refreshWatchlistButton.disabled = true;
-  try {
-    const response = await fetch("/api/watchlist");
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.detail || "监护清单加载失败");
-    renderWatchlist(payload || []);
-  } catch (error) {
-    watchlistList.innerHTML = `<div class="empty-state">${escapeHtml(error.message || "监护清单加载失败")}</div>`;
-  } finally {
-    refreshWatchlistButton.disabled = false;
-  }
-}
-
-function renderMonitorRecommendation(title, recommendation) {
-  if (!recommendation) return "";
-  const stanceLabels = { bullish: "偏多", neutral: "中性", bearish: "偏空", avoid: "回避" };
-  return `<div class="recommendation"><div><span>${escapeHtml(title)}</span><strong class="stance-${escapeHtml(recommendation.stance)}">${escapeHtml(stanceLabels[recommendation.stance] || recommendation.stance)}</strong><small>置信度 ${formatPercent(recommendation.confidence)}</small></div><p>${escapeHtml(recommendation.rationale)}</p>${recommendation.entry_condition ? `<small>触发：${escapeHtml(recommendation.entry_condition)}</small>` : ""}${recommendation.invalidation_condition ? `<small>失效：${escapeHtml(recommendation.invalidation_condition)}</small>` : ""}</div>`;
-}
-
-function renderMonitorReports(items) {
-  if (!items.length) {
-    monitorReportList.innerHTML = '<div class="empty-state">暂无监测报告。先维护监护清单，再点击“立即运行”。</div>';
-    return;
-  }
-  monitorReportList.innerHTML = items.map((report) => {
-    const events = (report.events || []).map((event) => `<span class="tag">${escapeHtml(event.description)}</span>`).join("");
-    const citations = (report.citations || []).map((citation) => `<li><span>[${citation.citation_id}] ${escapeHtml(citation.title)}</span>${citation.url ? `<a href="${escapeHtml(citation.url)}" target="_blank" rel="noreferrer">查看</a>` : ""}</li>`).join("");
-    return `<article class="monitor-report-card">
-      <div class="monitor-report-heading"><div><strong>${escapeHtml(report.symbol)} · ${escapeHtml(report.name)}</strong><span>${escapeHtml(formatDate(report.trading_date))} · ${escapeHtml(report.status)} · ${escapeHtml(report.data_status)}</span></div><span class="status-pill ${report.status === "degraded" ? "busy" : ""}">${escapeHtml(report.status)}</span></div>
-      <p>${escapeHtml(report.analysis || "无分析文本")}</p>
-      <div class="monitor-events">${events || '<span class="muted">未触发确定性事件</span>'}</div>
-      <div class="recommendation-grid">${renderMonitorRecommendation("5 个交易日", report.recommendation_5d)}${renderMonitorRecommendation("20 个交易日", report.recommendation_20d)}</div>
-      ${(report.missing_data || []).length ? `<div class="degraded-note">数据限制：${escapeHtml(report.missing_data.join("；"))}</div>` : ""}
-      <details><summary>证据与引用（${(report.citations || []).length}）</summary><ul class="citation-list">${citations}</ul></details>
-    </article>`;
-  }).join("");
-}
-
-async function loadMonitorReports() {
-  refreshMonitorButton.disabled = true;
-  setMonitorMessage(monitorMessage, "正在读取监测报告。");
-  try {
-    const params = new URLSearchParams();
-    if (monitorTradingDate.value) params.set("trading_date", monitorTradingDate.value);
-    if (monitorStatus.value) params.set("status", monitorStatus.value);
-    const response = await fetch(`/api/monitor/reports?${params.toString()}`);
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.detail || "监测报告加载失败");
-    renderMonitorReports(payload.items || []);
-    setMonitorMessage(monitorMessage, `共 ${payload.total || 0} 条监测报告。`, "success");
-  } catch (error) {
-    monitorReportList.innerHTML = `<div class="empty-state">${escapeHtml(error.message || "监测报告加载失败")}</div>`;
-    setMonitorMessage(monitorMessage, error.message || "监测报告加载失败", "error");
-  } finally {
-    refreshMonitorButton.disabled = false;
-  }
-}
-
-async function pollMonitorRun(runId) {
-  for (let attempt = 0; attempt < 240; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-    const response = await fetch(`/api/monitor/runs/${encodeURIComponent(runId)}`);
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.detail || "运行状态读取失败");
-    setMonitorMessage(monitorMessage, `监测任务 ${payload.status}，请稍候…`, payload.status === "failed" ? "error" : "info");
-    if (["completed", "degraded", "skipped", "failed"].includes(payload.status)) {
-      await loadMonitorReports();
-      return;
-    }
-  }
-  throw new Error("监测任务等待超时，请稍后刷新收件箱。");
 }
 
 pageNavButtons.forEach((button) => {
@@ -1580,11 +1545,22 @@ pageNavButtons.forEach((button) => {
       if (active) item.setAttribute("aria-current", "page");
       else item.removeAttribute("aria-current");
     });
-    if (pageId === "researchPage") loadReports();
-    if (pageId === "monitorPage") { loadWatchlist(); loadMonitorReports(); }
+    if (pageId === "reportsPage") loadReports();
     if (pageId === "agentPage" && !state.agentThreadId) loadAgentThreads();
     requestAnimationFrame(() => state.chart?.resize());
   });
+});
+
+document.querySelector("#openNewsPage").addEventListener("click", () => {
+  document.querySelector('[data-page="researchPage"]').click();
+  window.scrollTo(0, 0);
+});
+document.querySelector("#openReportsPage").addEventListener("click", () => {
+  reportStockCode.value = symbolInput.value.split(".")[0];
+  reportYear.value = "";
+  state.reportPage = 1;
+  document.querySelector('[data-page="reportsPage"]').click();
+  window.scrollTo(0, 0);
 });
 
 newAgentThreadButton?.addEventListener("click", async () => {
@@ -1712,71 +1688,6 @@ chatThreadTabs?.addEventListener("dblclick", async (event) => {
   if (tab) await renameChatThread(tab.dataset.chatThread);
 });
 
-watchlistForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const button = watchlistForm.querySelector("button[type='submit']");
-  button.disabled = true;
-  try {
-    const response = await fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol: watchlistSymbol.value.trim().toUpperCase(), thresholds: { price_move: Number(priceMoveThreshold.value), volume_ratio: Number(volumeRatioThreshold.value) } }) });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.detail || "加入监护清单失败");
-    watchlistSymbol.value = "";
-    setMonitorMessage(watchlistMessage, `${payload.symbol} 已加入监护清单。`, "success");
-    await loadWatchlist();
-  } catch (error) {
-    setMonitorMessage(watchlistMessage, error.message || "加入监护清单失败", "error");
-  } finally {
-    button.disabled = false;
-  }
-});
-
-watchlistList.addEventListener("click", async (event) => {
-  const button = event.target.closest("button[data-action]");
-  if (!button) return;
-  const card = button.closest(".watchlist-card");
-  const symbol = card.dataset.symbol;
-  button.disabled = true;
-  try {
-    if (button.dataset.action === "delete") {
-      const response = await fetch(`/api/watchlist/${encodeURIComponent(symbol)}`, { method: "DELETE" });
-      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || "移除失败");
-    } else if (button.dataset.action === "edit") {
-      const priceMove = window.prompt("单日涨跌阈值（例如 0.03）", "0.03");
-      if (priceMove === null) { button.disabled = false; return; }
-      const volumeRatio = window.prompt("成交量倍数阈值（例如 1.8）", "1.8");
-      if (volumeRatio === null) { button.disabled = false; return; }
-      const response = await fetch(`/api/watchlist/${encodeURIComponent(symbol)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ thresholds: { price_move: Number(priceMove), volume_ratio: Number(volumeRatio) } }) });
-      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || "阈值更新失败");
-    } else {
-      const enabled = button.textContent.trim() === "启用";
-      const response = await fetch(`/api/watchlist/${encodeURIComponent(symbol)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled }) });
-      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || "更新失败");
-    }
-    await loadWatchlist();
-  } catch (error) {
-    setMonitorMessage(watchlistMessage, error.message || "监护清单更新失败", "error");
-    button.disabled = false;
-  }
-});
-
-refreshWatchlistButton.addEventListener("click", loadWatchlist);
-refreshMonitorButton.addEventListener("click", loadMonitorReports);
-monitorFilterForm.addEventListener("submit", (event) => { event.preventDefault(); loadMonitorReports(); });
-runMonitorButton.addEventListener("click", async () => {
-  runMonitorButton.disabled = true;
-  try {
-    const response = await fetch("/api/monitor/runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.detail || "监测任务提交失败");
-    setMonitorMessage(monitorMessage, `监测任务已提交：${payload.run_id}`, "success");
-    await pollMonitorRun(payload.run_id);
-  } catch (error) {
-    setMonitorMessage(monitorMessage, error.message || "监测任务提交失败", "error");
-  } finally {
-    runMonitorButton.disabled = false;
-  }
-});
-
 reportFilterForm.addEventListener("submit", (event) => {
   event.preventDefault();
   state.reportPage = 1;
@@ -1785,11 +1696,6 @@ reportFilterForm.addEventListener("submit", (event) => {
 refreshReportsButton.addEventListener("click", loadReports);
 prevReportPageButton.addEventListener("click", () => { if (state.reportPage > 1) { state.reportPage -= 1; loadReports(); } });
 nextReportPageButton.addEventListener("click", () => { state.reportPage += 1; loadReports(); });
-reportList.addEventListener("click", (event) => {
-  const button = event.target.closest('[data-action="read-page"]');
-  if (button) showReportPage(button);
-});
-
 marketForm.addEventListener("submit", (event) => event.preventDefault());
 let securityMatches = [];
 let securityActive = 0;
@@ -1801,8 +1707,9 @@ function closeSecurityResults() {
 function showSecurityResults(query) {
   const text = query.trim().toLocaleLowerCase();
   const all = state.securities.map((item, index) => ({ item, index })).filter(({ item }) => `${item.symbol} ${item.name} ${item.exchange}`.toLocaleLowerCase().includes(text));
+  securityMatches = all;
   securityActive = 0;
-  securityResults.innerHTML = all.map(({ item, index }, position) => `<div class="security-option" role="option" id="security-option-${position}" data-index="${index}" aria-selected="${position === 0}"><span>${escapeHtml(item.name)}</span><small>${escapeHtml(item.symbol)} · ${escapeHtml(item.exchange)}</small></div>`).join("") + (!all.length ? '<div class="security-results-note">未找到证券</div>' : "");
+  securityResults.innerHTML = all.map(({ item, index }, position) => `<div class="security-option" role="option" id="security-option-${position}" data-index="${index}" aria-selected="${position === 0}"><span>${escapeHtml(item.name)}</span><small>${escapeHtml(item.symbol)}</small></div>`).join("") + (!all.length ? '<div class="security-results-note">未找到证券</div>' : "");
   securityResults.hidden = false;
   securitySearch.setAttribute("aria-expanded", "true");
   if (securityMatches.length) securitySearch.setAttribute("aria-activedescendant", "security-option-0");
@@ -1821,6 +1728,7 @@ securitySearch.addEventListener("click", () => { if (securityResults.hidden) sho
 securitySearch.addEventListener("blur", closeSecurityResults);
 securitySearch.addEventListener("input", () => {
   symbolInput.selectedIndex = -1;
+  loadQuickReports();
   showSecurityResults(securitySearch.value);
   ++state.marketRequestId;
   ++state.intradayRequestId;
@@ -1866,6 +1774,7 @@ document.addEventListener("click", (event) => { if (!event.target.closest(".secu
 marketForm.addEventListener("change", (event) => {
   if (event.target.matches("select")) loadMarket();
   if (event.target === symbolInput) {
+    loadQuickReports();
     clearStockPrice();
     stockPriceTime.textContent = "正在获取行情";
     clearStockMetrics();
@@ -1884,7 +1793,9 @@ document.querySelector(".period-tabs").addEventListener("click", (event) => {
   loadMarket();
 });
 loadOlderButton.addEventListener("click", () => {
-  if (state.historyBefore) loadOlderHistory();
+  if (state.historyCheckExpired) loadMarket();
+  else if (state.historyCheckFailed && state.historyAvailability) checkHistoryAvailability(state.marketRequestId, state.historyAvailability);
+  else if (state.historyBefore) loadOlderHistory();
   else loadMarket();
 });
 chatForm.addEventListener("submit", (event) => { event.preventDefault(); const question = questionInput.value.trim(); if (!question || state.chatStreaming) return; addMessage("user", question); questionInput.value = ""; sendQuestion(question); });
@@ -1894,6 +1805,7 @@ pageSizeSelect.addEventListener("change", () => { state.newsPage = 1; state.news
 prevPageButton.addEventListener("click", () => { if (state.newsPage > 1) { state.newsPage -= 1; loadNews(); } });
 nextPageButton.addEventListener("click", () => { state.newsPage += 1; loadNews(); });
 window.addEventListener("resize", () => state.chart?.resize());
+if (window.ResizeObserver) new ResizeObserver(() => state.chart?.resize()).observe(marketChart);
 
 let realtimeRequestId = 0;
 let realtimeAbortController = null;
@@ -1908,12 +1820,11 @@ function renderRealtimeIndices(indices = []) {
   const bySymbol = new Map(indices.map((item) => [item.symbol, item]));
   document.getElementById("realtimeIndices").innerHTML = indexNames.map(([symbol, name]) => {
     const item = bySymbol.get(symbol);
-    if (!item) return `<div class="index-card"><span class="index-name">${name}</span><strong>—</strong><small>暂无数据</small></div>`;
+    if (!item) return `<div class="index-card"><span class="index-name">${name}</span><strong>—</strong></div>`;
     const change = Number(item.change);
     const color = change > 0 ? "market-up" : change < 0 ? "market-down" : "market-flat";
     const sign = change > 0 ? "+" : "";
-    const status = {fresh: "", closed: "休市 · ", unknown: "交易状态未知 · ", not_updated: "最近行情 · ", source_error: "最近行情 · "}[item.status] ?? "最近行情 · ";
-    return `<div class="index-card"><span class="index-name">${name}</span><strong class="${color}">${formatNumber(item.price)}</strong><span class="index-change ${color}">${sign}${formatNumber(change)}　${sign}${formatNumber(item.change_percent)}%</span><small>${status}${escapeHtml(formatRealtimeTime(item.source_time))}</small></div>`;
+    return `<div class="index-card"><span class="index-name">${name}</span><strong class="${color}">${formatNumber(item.price)}</strong><span class="index-change ${color}">${sign}${formatNumber(change)}　${sign}${formatNumber(item.change_percent)}%</span><small>${escapeHtml(formatRealtimeTime(item.source_time))}</small></div>`;
   }).join("");
 }
 renderRealtimeIndices();
@@ -1984,11 +1895,9 @@ async function loadRealtimeQuotes() {
     }
     const market = data.market;
     renderRealtimeIndices(data.indices || []);
-    const roundTime = market ? new Date(market.round_id).getTime() : NaN;
-    const oldRound = Number.isFinite(roundTime) && Date.now() - roundTime > 300000;
     overview.innerHTML = market
-      ? [["上涨", market.rising, "market-up"], ["下跌", market.falling, "market-down"], ["平盘", market.flat, "market-flat"]].map(([label, value, color]) => `<span class="breadth-item">${label}<strong class="${color}">${escapeHtml(String(value))}</strong></span>`).join("") + `<span class="market-meta">${escapeHtml(formatRealtimeTime(market.round_id))}${oldRound ? " · 最近数据" : ""}${market.complete ? "" : " · 部分行情暂未纳入"}</span>`
-      : "涨跌数据暂无数据";
+      ? [["上涨", market.rising, "market-up"], ["下跌", market.falling, "market-down"], ["平盘", market.flat, "market-flat"]].map(([label, value, color]) => `<span class="breadth-item">${label}<strong class="${color}">${escapeHtml(String(value))}</strong></span>`).join("") + `<span class="market-meta">${escapeHtml(formatRealtimeTime(market.round_id))}</span>`
+      : "";
   } catch (error) {
     if (error.name === "AbortError" || requestId !== realtimeRequestId) return;
     const updateChart = state.marketPeriod !== "intraday" && state.historyReady && !state.historyLoading;
@@ -1999,7 +1908,7 @@ async function loadRealtimeQuotes() {
     stockPriceTime.textContent = "行情暂不可用";
     clearStockMetrics();
     renderRealtimeIndices();
-    overview.textContent = "涨跌数据暂不可用";
+    overview.textContent = "";
   }
 }
 loadRealtimeQuotes();

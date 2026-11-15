@@ -68,7 +68,7 @@ class BronzeWriter:
         raw_response: dict,
         start_time: datetime | None,
         end_time: datetime | None,
-        limit: int,
+        limit: int | None,
         ingested_at: datetime | None = None,
     ) -> str:
         """Write one raw news response file and return object path."""
@@ -227,7 +227,7 @@ class BronzeWriter:
         logger.info("Annual report PDF written to Bronze", extra_fields={"pdf_object_path": pdf_object_path, "manifest_path": manifest_path})
         return manifest_path
 
-    def list_objects(self, prefix: str = "news/provider=juhe/") -> list[str]:
+    def list_objects(self, prefix: str = "news/") -> list[str]:
         """List Bronze object paths."""
 
         try:
@@ -235,7 +235,7 @@ class BronzeWriter:
         except (S3Error, MinioException) as exc:
             raise BronzeWriterError(f"Failed to list bronze objects: {exc}") from exc
 
-    def all_external_ids(self, prefix: str = "news/provider=juhe/") -> set[str]:
+    def all_external_ids(self, prefix: str = "news/provider=caixin/") -> set[str]:
         """Return provider ids already captured in Bronze, without API calls."""
 
         external_ids: set[str] = set()

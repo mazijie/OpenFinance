@@ -63,16 +63,23 @@ class Settings(BaseSettings):
     ICEBERG_GOLD_METRICS_TABLE: str = "gold_security_daily_metrics"
     ICEBERG_S3_PATH_STYLE_ACCESS: bool = True
 
-    FINANCE_DEFAULT_PROVIDER: str = "baostock"
+    STARROCKS_HOST: str = "localhost"
+    STARROCKS_PORT: int = 9030
+    STARROCKS_USER: str = "openfinance_reader"
+    STARROCKS_PASSWORD: str = ""
+    STARROCKS_CATALOG: str = "openfinance"
+    STARROCKS_CONNECT_TIMEOUT_SECONDS: int = Field(default=5, gt=0)
+    STARROCKS_QUERY_TIMEOUT_SECONDS: int = Field(default=45, gt=0)
+
     # Daily history is independent of BaoStock security metadata and calendars.
-    FINANCE_DAILY_PROVIDER: Literal["tencent", "baostock"] = "tencent"
+    FINANCE_DAILY_PROVIDER: Literal["tencent"] = "tencent"
     TENCENT_CONNECT_TIMEOUT_SECONDS: float = Field(default=5.0, gt=0)
     TENCENT_READ_TIMEOUT_SECONDS: float = Field(default=15.0, gt=0)
     TENCENT_MAX_RETRIES: int = Field(default=2, ge=0, le=2)
     TENCENT_RETRY_BACKOFF_SECONDS: float = Field(default=2.0, ge=0)
     # Zero means no configured quota, not an assertion about upstream limits.
     TENCENT_DAILY_REQUEST_LIMIT: int = Field(default=0, ge=0)
-    FINANCE_DEFAULT_ADJUSTMENT_TYPE: str = "qfq"
+    FINANCE_DEFAULT_ADJUSTMENT_TYPE: Literal["none"] = "none"
     FINANCE_DEFAULT_LOOKBACK_DAYS: int = 30
     BAOSTOCK_SOCKET_TIMEOUT_SECONDS: float = 15.0
     BAOSTOCK_SYMBOL_TIMEOUT_SECONDS: int = 45
@@ -90,14 +97,13 @@ class Settings(BaseSettings):
     A_SHARE_BACKFILL_START_DATE: str = "1990-01-01"
     A_SHARE_BATCH_SIZE: int = 100
     A_SHARE_MAX_ACTIVE_BATCHES: int = 4
-    A_SHARE_UNIVERSE_LOOKBACK_DAYS: int = 30
     ICEBERG_WRITE_MAX_RETRIES: int = 10
     ICEBERG_WRITE_INITIAL_BACKOFF_SECONDS: float = 1.0
     ICEBERG_WRITE_MAX_BACKOFF_SECONDS: float = 30.0
     ICEBERG_WRITE_LOCK_TIMEOUT_SECONDS: float = 300.0
 
     NEWS_HTTP_TIMEOUT_SECONDS: float = 10.0
-    # External API calls are quota-billed. Retries are opt-in and default to zero.
+    # External request retries are opt-in and default to zero.
     NEWS_HTTP_MAX_RETRIES: int = 0
     NEWS_HTTP_RETRY_BACKOFF_SECONDS: float = 1.0
     CNINFO_USER_AGENT: str = "OpenFinance-Agent/0.1 (+https://www.cninfo.com.cn/)"
@@ -140,6 +146,8 @@ class Settings(BaseSettings):
     ANNUAL_REPORT_RECOVERY_SCHEDULE: str = "15 4 * * *"
     ANNUAL_REPORT_MAX_STAGE_ATTEMPTS: int = 5
     NEWS_DEFAULT_LIMIT: int = 50
+    CAIXIN_NEWS_URL: str = "https://cxdata.caixin.com/api/dataplus/sjtPc/news"
+    # Legacy collector settings retained for historical integrations.
     JUHE_NEWS_API_KEY: str = ""
     JUHE_NEWS_LIST_URL: str = "https://v.juhe.cn/toutiao/index"
     JUHE_NEWS_DETAIL_URL: str = "https://v.juhe.cn/toutiao/content"
@@ -152,7 +160,6 @@ class Settings(BaseSettings):
 
     NEWS_EMPTY_RESULT_MESSAGE: str = "当前自有湖仓在指定时间范围内未检索到相关新闻。"
     NEWS_SYMBOL_ALIASES_JSON: str = Field(default="{}", alias="NEWS_SYMBOL_ALIASES")
-    NEWS_INGEST_LIMIT: int = 20
     NEWS_INGEST_LOOKBACK_HOURS: int = 6
     NEWS_AIRFLOW_SCHEDULE: str = "*/30 * * * *"
     OPENFINANCE_INTERNAL_API_BASE_URL: str = "http://localhost:8000"
@@ -160,6 +167,7 @@ class Settings(BaseSettings):
 
     RAG_VECTOR_TABLE: str = "news_chunks"
     RAG_ANNUAL_REPORT_VECTOR_TABLE: str = "annual_report_chunks"
+    ANNUAL_REPORT_INDEX_READER: Literal["pyiceberg", "starrocks"] = "starrocks"
     RAG_EMBEDDING_MODEL: str = "bge-m3"
     RAG_EMBEDDING_PATH: str = "/embeddings"
     RAG_EMBEDDING_DIMENSION: int = 1024
@@ -190,12 +198,6 @@ class Settings(BaseSettings):
     RAG_RERANK_TIMEOUT_SECONDS: float = 10.0
     RAG_RERANK_MIN_SCORE: float = 0.15
 
-    INVESTMENT_MONITOR_AIRFLOW_SCHEDULE: str = "0 20 * * 1-5"
-    INVESTMENT_MONITOR_MAX_SYMBOLS: int = 50
-    INVESTMENT_MONITOR_CONCURRENCY: int = 4
-    INVESTMENT_MONITOR_RECOMMENDATIONS_ENABLED: bool = False
-    INVESTMENT_MONITOR_PRICE_MOVE_THRESHOLD: float = 0.03
-    INVESTMENT_MONITOR_VOLUME_RATIO_THRESHOLD: float = 1.8
 
     HARNESS_V1_ENABLED: bool = True
     HARNESS_DYNAMIC_BUDGET_ENABLED: bool = True

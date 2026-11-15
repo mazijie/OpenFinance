@@ -9,10 +9,10 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 
 from backend.config import settings
-from backend.ingestion.collectors.juhe import JuheCollector
+from backend.ingestion.collectors.caixin import CaixinCollector
 from backend.ingestion.writers.bronze_writer import BronzeWriter
 from backend.logging_utils import configure_logging, get_logger
-from backend.repositories.news_repository import NewsRepository
+from backend.lakehouse.news_writer import NewsWriter
 from backend.utils.time import ensure_utc, parse_possible_datetime
 
 logger = get_logger(__name__)
@@ -27,7 +27,7 @@ class IngestNewsResult:
     article_count: int
     start_time: datetime | None
     end_time: datetime | None
-    limit: int
+    limit: int | None
 
     def to_dict(self) -> dict[str, object]:
         """Serialize result for logging or Airflow XCom."""
@@ -46,31 +46,27 @@ async def ingest_finance_news(
     end_time: datetime | None = None,
     limit: int | None = None,
 ) -> IngestNewsResult:
-    """Collect finance news from Juhe and persist raw result to Bronze."""
+    """Collect Caixin summaries and persist the feed response to Bronze."""
 
-    collector = JuheCollector()
+    collector = CaixinCollector()
     writer = BronzeWriter()
-    # Querying Bronze as well as Silver prevents a downstream Silver failure
-    # from causing the next schedule to fetch the same details again.
-    bronze_ids = writer.all_external_ids()
-    repository = NewsRepository()
+    # Deduplicate against both layers; a failed Silver job can replay its Bronze object.
+    bronze_ids = writer.all_external_ids(prefix="news/provider=caixin/")
+    silver_writer = NewsWriter()
     resolved_start = ensure_utc(start_time)
     resolved_end = ensure_utc(end_time)
-    resolved_limit = limit or settings.NEWS_INGEST_LIMIT or settings.NEWS_DEFAULT_LIMIT
-
     response = await collector.collect_news(
-        existing_external_ids=bronze_ids | repository.all_external_ids(),
-        limit=resolved_limit,
+        existing_external_ids=bronze_ids | silver_writer.all_external_ids(),
     )
     object_path: str | None = None
     if response.articles:
         object_path = writer.write_news_raw(
-            provider="juhe",
-            query="caijing",
+            provider="caixin",
+            query="latest",
             raw_response=response.raw_response,
             start_time=resolved_start,
             end_time=resolved_end,
-            limit=resolved_limit,
+            limit=None,
         )
     result = IngestNewsResult(
         category="caijing",
@@ -78,10 +74,10 @@ async def ingest_finance_news(
         article_count=len(response.articles),
         start_time=resolved_start,
         end_time=resolved_end,
-        limit=resolved_limit,
+        limit=None,
     )
     logger.info(
-        "财经新闻采集任务完成" if object_path else "没有符合正文要求的新闻，未写入 Bronze",
+        "财经新闻采集任务完成" if object_path else "没有新的有效新闻摘要，未写入 Bronze",
         event="ingest_finance_news_completed",
         extra_fields=result.to_dict(),
     )
@@ -117,10 +113,10 @@ def build_default_window(end_time: datetime | None = None, lookback_hours: int |
 def build_parser() -> argparse.ArgumentParser:
     """Build CLI argument parser."""
 
-    parser = argparse.ArgumentParser(description="Ingest Juhe finance news into Bronze")
+    parser = argparse.ArgumentParser(description="Ingest Caixin news summaries into Bronze")
     parser.add_argument("--start-time", help="Start time in ISO-8601 format")
     parser.add_argument("--end-time", help="End time in ISO-8601 format")
-    parser.add_argument("--limit", type=int, default=settings.NEWS_INGEST_LIMIT, help="Maximum number of records")
+    parser.add_argument("--limit", type=int, help="Deprecated; accepted for compatibility and ignored")
     parser.add_argument(
         "--use-default-window",
         action="store_true",

@@ -117,9 +117,12 @@ def test_internal_a_share_universe_requires_token(monkeypatch) -> None:
 def test_internal_a_share_universe_success(monkeypatch) -> None:
     from backend.config import settings
 
-    fake_module = types.ModuleType("backend.providers.finance")
+    fake_module = types.ModuleType("backend.providers.tencent_securities")
 
     class FakeProvider:
+        def close(self):
+            pass
+
         def list_a_share_symbols(self, **kwargs):
             class Result:
                 status = "available"
@@ -127,8 +130,8 @@ def test_internal_a_share_universe_success(monkeypatch) -> None:
                 symbols = ["000001.SZ", "600519.SH"]
             return Result()
 
-    fake_module.BaoStockFinanceProvider = FakeProvider
-    monkeypatch.setitem(sys.modules, "backend.providers.finance", fake_module)
+    fake_module.TencentSecurityProvider = FakeProvider
+    monkeypatch.setitem(sys.modules, "backend.providers.tencent_securities", fake_module)
     monkeypatch.setattr(settings, "OPENFINANCE_INTERNAL_API_TOKEN", "internal-token")
     client = TestClient(app)
 
@@ -144,6 +147,7 @@ def test_internal_a_share_universe_success(monkeypatch) -> None:
         "as_of_date": "2026-08-20",
         "symbols": ["000001.SZ", "600519.SH"],
         "symbol_count": 2,
+        "historical_universe_complete": False,
     }
 
 
@@ -221,18 +225,18 @@ def test_internal_a_share_ingest_job_success(monkeypatch) -> None:
     class FakeResult:
         def to_dict(self) -> dict[str, object]:
             return {
-                "provider": "baostock",
-                "object_path": "finance/provider=baostock/test.json",
+                "provider": "tencent",
+                "object_path": "finance/provider=tencent/test.json",
                 "symbol_count": 1,
                 "daily_bar_count": 3,
                 "start_date": "2026-07-17",
                 "end_date": "2026-07-19",
-                "adjustment_type": "qfq",
+                "adjustment_type": "none",
             }
 
     def fake_ingest_a_share_daily_bars(**kwargs) -> FakeResult:
         assert kwargs["symbols"] == ["600519.SH"]
-        assert kwargs["adjustment_type"] == "qfq"
+        assert kwargs["adjustment_type"] == "none"
         return FakeResult()
 
     fake_module.ingest_a_share_daily_bars = fake_ingest_a_share_daily_bars
@@ -247,12 +251,12 @@ def test_internal_a_share_ingest_job_success(monkeypatch) -> None:
             "symbols": ["600519.SH"],
             "start_date": "2026-07-17T00:00:00+00:00",
             "end_date": "2026-07-19T00:00:00+00:00",
-            "adjustment_type": "qfq",
+            "adjustment_type": "none",
         },
     )
 
     assert response.status_code == 200
-    assert response.json()["object_path"] == "finance/provider=baostock/test.json"
+    assert response.json()["object_path"] == "finance/provider=tencent/test.json"
 
 
 def test_internal_bronze_to_silver_job_success(monkeypatch) -> None:
@@ -363,3 +367,25 @@ def test_internal_rag_index_job_success(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json()["written_chunks"] == 3
+
+
+def test_trading_day_is_shared_and_requires_internal_token(monkeypatch):
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "OPENFINANCE_INTERNAL_API_TOKEN", "internal-token")
+    monkeypatch.setattr("backend.services.finance_service.FinanceService.is_trading_day", lambda self, day: True)
+    client = TestClient(app)
+    assert client.get("/internal/jobs/trading-day", params={"trading_date": "2026-11-09"}).status_code == 403
+    response = client.get(
+        "/internal/jobs/trading-day", params={"trading_date": "2026-11-09"},
+        headers={"X-OpenFinance-Token": "internal-token"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"trading_date": "2026-11-09", "is_open": True}
+    assert client.get("/internal/jobs/investment-monitor/trading-day", params={"trading_date": "2026-11-09"}).status_code == 404
+
+
+def test_monitor_and_watchlist_routes_removed():
+    client = TestClient(app)
+    for path in ("/api/monitor/reports", "/api/watchlist", "/internal/jobs/investment-monitor/runs/old"):
+        assert client.get(path).status_code == 404

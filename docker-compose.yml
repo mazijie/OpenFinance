@@ -1,4 +1,89 @@
+x-embedding: &embedding
+  image: ${LOCAL_EMBEDDING_IMAGE:-docker.1ms.run/ollama/ollama:latest}
+  container_name: openfinance-embedding
+  restart: unless-stopped
+  runtime: ${OPENFINANCE_OLLAMA_RUNTIME:-runc}
+  environment:
+    OLLAMA_HOST: 0.0.0.0:11434
+    OLLAMA_KEEP_ALIVE: "-1"
+    OLLAMA_MAX_LOADED_MODELS: "1"
+    OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-1}
+    NVIDIA_VISIBLE_DEVICES: all
+    NVIDIA_DRIVER_CAPABILITIES: compute,utility
+  ports:
+    - "127.0.0.1:8001:11434"
+  volumes:
+    - embedding_data:/root/.ollama
+  networks:
+    default:
+      aliases: [embedding]
+  healthcheck:
+    test: ["CMD", "ollama", "list"]
+    interval: 10s
+    timeout: 5s
+    retries: 30
+    start_period: 20s
+
 services:
+  # The query service is started with the stack; credentials are initialized explicitly.
+  starrocks:
+    image: starrocks/allin1-ubuntu:3.5.21
+    hostname: starrocks
+    mem_limit: ${STARROCKS_MEMORY_LIMIT:-8g}
+    cpus: ${STARROCKS_CPUS:-4}
+    ports:
+      - "127.0.0.1:${STARROCKS_LOCAL_PORT:-19030}:9030"
+    volumes:
+      - starrocks_fe_meta:/data/deploy/starrocks/fe/meta
+      - starrocks_be_storage:/data/deploy/starrocks/be/storage
+    restart: unless-stopped
+
+  starrocks-postgres-init:
+    profiles: ["starrocks-init"]
+    image: pgvector/pgvector:pg16
+    env_file: [.env]
+    environment:
+      PGHOST: postgres
+      PGDATABASE: openfinance
+      PGUSER: openfinance
+      PGPASSWORD: openfinance
+    volumes:
+      - ./deploy/starrocks/init-postgres.sh:/init.sh:ro
+    entrypoint: ["bash", "/init.sh"]
+    restart: "no"
+
+  starrocks-minio-init:
+    profiles: ["starrocks-init"]
+    image: minio/mc:latest
+    env_file: [.env]
+    environment:
+      STARROCKS_MINIO_ADMIN_USER: ${STARROCKS_MINIO_ADMIN_USER:-minioadmin}
+      STARROCKS_MINIO_ADMIN_PASSWORD: ${STARROCKS_MINIO_ADMIN_PASSWORD:-minioadmin}
+      STARROCKS_WAREHOUSE_BUCKET: ${MINIO_WAREHOUSE_BUCKET:-openfinance-warehouse}
+    volumes:
+      - ./deploy/starrocks/init-minio.sh:/init.sh:ro
+    entrypoint: ["/bin/sh", "/init.sh"]
+    restart: "no"
+
+  starrocks-catalog-init:
+    profiles: ["starrocks-init"]
+    image: openfinance-backend:latest
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql://openfinance:openfinance@postgres:5432/openfinance
+      MINIO_ENDPOINT: minio:9000
+      ICEBERG_CATALOG_URI: postgresql+psycopg://openfinance:openfinance@postgres:5432/openfinance
+      STARROCKS_HOST: starrocks
+      STARROCKS_PORT: 9030
+      STARROCKS_ICEBERG_JDBC_URI: jdbc:postgresql://postgres:5432/openfinance?currentSchema=openfinance
+      STARROCKS_ICEBERG_JDBC_USER: openfinance_starrocks_ro
+      STARROCKS_S3_ENDPOINT: http://minio:9000
+      STARROCKS_S3_ACCESS_KEY: openfinance_sr_ro
+    volumes:
+      - .:/app
+    command: ["python", "-m", "backend.maintenance.setup_starrocks_catalog"]
+    restart: "no"
+
   spark-events-init:
     image: ${SPARK_LEARNING_IMAGE:-openfinance-spark-learning:4.1.2-iceberg1.12}
     build:
@@ -70,9 +155,9 @@ services:
       - org.apache.spark.deploy.worker.Worker
       - spark://spark-master:7077
       - --cores
-      - "2"
+      - ${SPARK_WORKER_CORES:-2}
       - --memory
-      - 2g
+      - ${SPARK_WORKER_MEMORY:-2g}
     ports:
       - "8082:8081"
     volumes:
@@ -97,6 +182,7 @@ services:
       - ./spark/conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
 
   backend:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: backend/Dockerfile
@@ -115,6 +201,8 @@ services:
     env_file:
       - .env
     environment:
+      STARROCKS_HOST: ${STARROCKS_CONTAINER_HOST:-starrocks}
+      STARROCKS_PORT: 9030
       DATABASE_URL: postgresql://openfinance:openfinance@postgres:5432/openfinance
       MINIO_ENDPOINT: minio:9000
       ICEBERG_CATALOG_URI: postgresql+psycopg://openfinance:openfinance@postgres:5432/openfinance
@@ -186,6 +274,8 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     restart: unless-stopped
+    deploy:
+      replicas: ${A_SHARE_INGEST_WORKERS:-1}
     depends_on:
       postgres:
         condition: service_healthy
@@ -205,25 +295,7 @@ services:
     command: ["python", "-m", "backend.workers.a_share_ingestion_worker"]
 
   embedding:
-    image: ${LOCAL_EMBEDDING_IMAGE:-docker.1ms.run/ollama/ollama:latest}
-    container_name: openfinance-embedding
-    restart: unless-stopped
-    gpus: all
-    environment:
-      OLLAMA_HOST: 0.0.0.0:11434
-      OLLAMA_KEEP_ALIVE: "-1"
-      OLLAMA_MAX_LOADED_MODELS: "1"
-      OLLAMA_NUM_PARALLEL: "2"
-    ports:
-      - "127.0.0.1:8001:11434"
-    volumes:
-      - embedding_data:/root/.ollama
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
-      start_period: 20s
+    <<: *embedding
 
   embedding-init:
     image: ${LOCAL_EMBEDDING_IMAGE:-docker.1ms.run/ollama/ollama:latest}
@@ -251,6 +323,7 @@ services:
     env_file:
       - .env
     environment:
+      PYTHONFAULTHANDLER: ${NORMALIZATION_PYTHONFAULTHANDLER:-0}
       DATABASE_URL: postgresql://openfinance:openfinance@postgres:5432/openfinance
       MINIO_ENDPOINT: minio:9000
       ICEBERG_CATALOG_URI: postgresql+psycopg://openfinance:openfinance@postgres:5432/openfinance
@@ -259,37 +332,8 @@ services:
       - .:/app
     command: ["python", "-m", "backend.workers.finance_normalization_worker"]
 
-  monitor-worker:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-      postgres-bootstrap:
-        condition: service_completed_successfully
-      opensearch:
-        condition: service_healthy
-      embedding-init:
-        condition: service_completed_successfully
-    env_file:
-      - .env
-    environment:
-      DATABASE_URL: postgresql://openfinance:openfinance@postgres:5432/openfinance
-      MINIO_ENDPOINT: minio:9000
-      ICEBERG_CATALOG_URI: postgresql+psycopg://openfinance:openfinance@postgres:5432/openfinance
-      OPENFINANCE_INTERNAL_API_TOKEN: ${OPENFINANCE_INTERNAL_API_TOKEN:-replace-with-a-shared-internal-token}
-      EMBEDDING_BASE_URL: http://embedding:11434/v1
-      EMBEDDING_API_KEY: ${LOCAL_EMBEDDING_API_KEY:-}
-      EMBEDDING_MODEL: ${LOCAL_EMBEDDING_MODEL:-bge-m3}
-      EMBEDDING_PATH: /embeddings
-      EMBEDDING_DIMENSION: ${LOCAL_EMBEDDING_DIMENSION:-1024}
-    volumes:
-      - .:/app
-    command: ["python", "-m", "backend.workers.monitor_worker"]
-
   postgres:
+    restart: unless-stopped
     image: pgvector/pgvector:pg16
     container_name: openfinance-postgres
     environment:
@@ -350,6 +394,7 @@ services:
     restart: "no"
 
   opensearch:
+    restart: unless-stopped
     image: opensearchproject/opensearch:2.19.1
     container_name: openfinance-opensearch
     environment:
@@ -368,6 +413,7 @@ services:
       retries: 10
 
   minio:
+    restart: unless-stopped
     image: minio/minio:latest
     container_name: openfinance-minio
     command: server /data --console-address ":9001"
@@ -401,7 +447,6 @@ services:
     restart: "no"
 
   airflow-init:
-    profiles: ["airflow"]
     build:
       context: .
       dockerfile: airflow/Dockerfile
@@ -432,7 +477,6 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
       ICEBERG_WAREHOUSE: ${ICEBERG_WAREHOUSE:-s3://openfinance-warehouse/}
-      NEWS_INGEST_LIMIT: ${NEWS_INGEST_LIMIT:-20}
       NEWS_INGEST_LOOKBACK_HOURS: ${NEWS_INGEST_LOOKBACK_HOURS:-6}
       NEWS_AIRFLOW_SCHEDULE: ${NEWS_AIRFLOW_SCHEDULE:-*/30 * * * *}
       _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USERNAME:-admin}
@@ -457,7 +501,7 @@ services:
     restart: "no"
 
   airflow-webserver:
-    profiles: ["airflow"]
+    restart: unless-stopped
     build:
       context: .
       dockerfile: airflow/Dockerfile
@@ -487,7 +531,6 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
       ICEBERG_WAREHOUSE: ${ICEBERG_WAREHOUSE:-s3://openfinance-warehouse/}
-      NEWS_INGEST_LIMIT: ${NEWS_INGEST_LIMIT:-20}
       NEWS_INGEST_LOOKBACK_HOURS: ${NEWS_INGEST_LOOKBACK_HOURS:-6}
       NEWS_AIRFLOW_SCHEDULE: ${NEWS_AIRFLOW_SCHEDULE:-*/30 * * * *}
     ports:
@@ -498,7 +541,7 @@ services:
     command: webserver
 
   airflow-scheduler:
-    profiles: ["airflow"]
+    restart: unless-stopped
     build:
       context: .
       dockerfile: airflow/Dockerfile
@@ -529,7 +572,6 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
       ICEBERG_WAREHOUSE: ${ICEBERG_WAREHOUSE:-s3://openfinance-warehouse/}
-      NEWS_INGEST_LIMIT: ${NEWS_INGEST_LIMIT:-20}
       NEWS_INGEST_LOOKBACK_HOURS: ${NEWS_INGEST_LOOKBACK_HOURS:-6}
       NEWS_AIRFLOW_SCHEDULE: ${NEWS_AIRFLOW_SCHEDULE:-*/30 * * * *}
     volumes:
@@ -537,7 +579,138 @@ services:
       - airflow_logs:/opt/airflow/logs
     command: scheduler
 
+  kafka:
+    restart: unless-stopped
+    image: ${REALTIME_KAFKA_IMAGE:-docker.1ms.run/apache/kafka:3.9.1}
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_LOG_RETENTION_HOURS: ${REALTIME_KAFKA_RETENTION_HOURS:-24}
+    volumes:
+      - realtime_kafka:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+  flink-jobmanager:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: realtime/Dockerfile.flink
+    command: jobmanager
+    depends_on:
+      flink-checkpoint-init: {condition: service_completed_successfully}
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        parallelism.default: 1
+        restart-strategy.type: fixed-delay
+        restart-strategy.fixed-delay.attempts: 10
+        restart-strategy.fixed-delay.delay: 5 s
+    ports: ["127.0.0.1:8083:8081"]
+    volumes: ["realtime_checkpoints:/opt/flink/checkpoints"]
+  flink-checkpoint-init:
+    build:
+      context: .
+      dockerfile: realtime/Dockerfile.flink
+    user: root
+    entrypoint: ["/bin/sh", "-c", "chown flink:flink /opt/flink/checkpoints"]
+    volumes: ["realtime_checkpoints:/opt/flink/checkpoints"]
+  flink-taskmanager:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: realtime/Dockerfile.flink
+    command: taskmanager
+    depends_on: [flink-jobmanager]
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 2
+        parallelism.default: 1
+    volumes: ["realtime_checkpoints:/opt/flink/checkpoints"]
+  flink-submit:
+    build:
+      context: .
+      dockerfile: realtime/Dockerfile.flink
+    depends_on:
+      kafka-init: {condition: service_completed_successfully}
+      flink-jobmanager: {condition: service_started}
+      flink-taskmanager: {condition: service_started}
+    environment:
+      QUOTE_LATENESS_SECONDS: ${QUOTE_LATENESS_SECONDS:-120}
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        parallelism.default: 1
+    volumes: ["./realtime/job.sql:/opt/flink/job.sql:ro", "./realtime/submit.sh:/opt/flink/submit.sh:ro"]
+    entrypoint: ["/bin/bash", "-c"]
+    command: ["exec /bin/bash /opt/flink/submit.sh"]
+    restart: on-failure
+  kafka-init:
+    image: ${REALTIME_KAFKA_IMAGE:-docker.1ms.run/apache/kafka:3.9.1}
+    depends_on:
+      kafka: {condition: service_healthy}
+    entrypoint: ["/bin/bash", "-c"]
+    command: ["for topic in quotes.raw quotes.latest quotes.windows quotes.market quotes.late; do /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic $$topic --partitions 3 --replication-factor 1 || exit 1; done"]
+  quote-collector:
+    build:
+      context: .
+      dockerfile: realtime/Dockerfile
+    depends_on:
+      kafka: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+      backend: {condition: service_started}
+    environment:
+      QUOTE_SYMBOLS: ${QUOTE_SYMBOLS:-600519.SH,000001.SZ}
+      QUOTE_MODE: ${QUOTE_MODE:-live}
+      DATABASE_URL: postgresql://openfinance:openfinance@postgres:5432/openfinance
+      CALENDAR_URL: http://backend:8000/internal/jobs/trading-day
+      UNIVERSE_URL: http://backend:8000/internal/jobs/realtime-universe
+      OPENFINANCE_INTERNAL_API_TOKEN: ${OPENFINANCE_INTERNAL_API_TOKEN:-replace-with-a-shared-internal-token}
+    command: ["python", "-m", "realtime.collector"]
+    restart: unless-stopped
+  quote-backfill:
+    build:
+      context: .
+      dockerfile: realtime/Dockerfile
+    depends_on:
+      kafka: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+      backend: {condition: service_started}
+    environment:
+      DATABASE_URL: postgresql://openfinance:openfinance@postgres:5432/openfinance
+      KAFKA_BOOTSTRAP: kafka:9092
+    command: ["python", "-m", "realtime.intraday_backfill"]
+    restart: unless-stopped
+  quote-consumer:
+    build:
+      context: .
+      dockerfile: realtime/Dockerfile
+    depends_on:
+      kafka: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+      backend: {condition: service_started}
+    environment:
+      DATABASE_URL: postgresql://openfinance:openfinance@postgres:5432/openfinance
+    command: ["python", "-m", "realtime.consumer"]
+    restart: unless-stopped
+
 volumes:
+  starrocks_fe_meta:
+  starrocks_be_storage:
+  realtime_kafka:
+  realtime_checkpoints:
   postgres_data:
   minio_data:
   airflow_logs:

@@ -40,7 +40,7 @@ class BronzeNewsObject(BaseModel):
     query: str
     start_time: datetime | None = None
     end_time: datetime | None = None
-    limit: int
+    limit: int | None
     raw_response: dict[str, Any]
 
     @field_validator("ingested_at", mode="before")

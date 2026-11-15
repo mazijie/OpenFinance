@@ -7,6 +7,7 @@ import re
 import psycopg
 from psycopg.rows import dict_row
 from backend.config import settings
+from backend.lakehouse.starrocks_daily_reader import StarRocksUnavailable
 
 CHINA = timezone(timedelta(hours=8))
 SYMBOL_PATTERN = re.compile(r"^\d{6}(?:\.(?:SH|SZ|BJ))?$")
@@ -31,6 +32,8 @@ def _trading_day(day):
 def trading_day(day):
     try:
         return _trading_day(day)
+    except StarRocksUnavailable:
+        raise
     except Exception:
         return None
 
@@ -58,21 +61,23 @@ class RealtimeQuoteService:
         if len(candidates) != 1:
             raise ValueError("分时行情请提供交易所后缀")
         with psycopg.connect(settings.DATABASE_URL, row_factory=dict_row) as conn:
-            rows = conn.execute("""WITH latest AS (
-                SELECT symbol, ((window_start AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Shanghai')::date AS day
-                FROM openfinance.realtime_quote_windows
-                WHERE symbol = ANY(%s) AND window_basis = 'capture_time'
-                  AND window_end <= (%s AT TIME ZONE 'UTC')
-                ORDER BY window_start DESC LIMIT 1
-            )
-            SELECT w.symbol, w.window_start AT TIME ZONE 'UTC' AS time, w.sample_avg AS price,
-                (w.recompute_stale OR EXISTS (SELECT 1 FROM openfinance.realtime_quote_late l
-                    WHERE l.symbol=w.symbol AND l.window_start=w.window_start AND l.resolved_at IS NULL)) AS incomplete
-            FROM openfinance.realtime_quote_windows w JOIN latest ON w.symbol=latest.symbol
-            WHERE w.window_basis='capture_time' AND w.window_end <= (%s AT TIME ZONE 'UTC')
-                AND ((w.window_start AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Shanghai')::date=latest.day
-            ORDER BY w.window_start""", (candidates, cutoff, cutoff)).fetchall()
-        return {"symbol": symbol.upper(), "points": rows}
+            rows = conn.execute("""WITH points AS (
+                SELECT w.symbol, w.window_start, w.sample_avg AS price, 'sample'::text AS source,
+                    (w.recompute_stale OR EXISTS (SELECT 1 FROM openfinance.realtime_quote_late l
+                      WHERE l.symbol=w.symbol AND l.window_start=w.window_start AND l.resolved_at IS NULL)) AS incomplete, 0 AS rank
+                FROM openfinance.realtime_quote_windows w
+                WHERE w.symbol=ANY(%s) AND w.window_basis='capture_time' AND w.window_end <= (%s AT TIME ZONE 'UTC')
+                UNION ALL
+                SELECT b.symbol,b.window_start,b.price,b.source,false,1
+                FROM openfinance.intraday_backfill_points b
+                WHERE b.symbol=ANY(%s) AND b.window_start + interval '1 minute' <= (%s AT TIME ZONE 'UTC')
+                  AND b.fetched_at <= %s
+            ), latest AS (SELECT ((max(window_start) AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Shanghai')::date AS day FROM points),
+            chosen AS (SELECT DISTINCT ON (symbol, window_start) * FROM points ORDER BY symbol,window_start,rank)
+            SELECT c.symbol,c.window_start AT TIME ZONE 'UTC' AS time,c.price,c.source,c.incomplete
+            FROM chosen c, latest WHERE ((c.window_start AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Shanghai')::date=latest.day
+            ORDER BY c.window_start""", (candidates, cutoff, candidates, cutoff, cutoff)).fetchall()
+        return {"symbol": candidates[0], "points": rows}
 
     def lookup(self, symbol=None, as_of=None, now=None):
         now = now or datetime.now(timezone.utc)

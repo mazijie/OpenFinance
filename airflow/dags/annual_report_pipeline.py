@@ -9,6 +9,7 @@ from urllib.request import Request, urlopen
 
 import pendulum
 from airflow.decorators import dag, task
+from airflow.models.param import Param
 from airflow.operators.python import get_current_context
 
 from annual_report_ray_helpers import assert_annual_report_run_succeeded, collect_manifest_paths, reconcile_annual_report_index, submit_and_wait_annual_report_ray
@@ -32,6 +33,14 @@ def _post(path: str, payload: dict[str, object]) -> object:
     catchup=False,
     max_active_runs=1,
     default_args={"owner": "openfinance", "retries": 2, "retry_delay": timedelta(minutes=10), "retry_exponential_backoff": True},
+    params={
+        "years": Param(json.loads(os.getenv("CNINFO_REPORT_YEARS_JSON", "[]")), type="array",
+                       items={"type": "integer", "minimum": 2000, "maximum": 2100},
+                       title="年报年份", description="输入年份数组，例如 [2023, 2024]。"),
+        "stocks": Param(json.loads(os.getenv("CNINFO_REPORT_STOCKS_JSON", "[]")), type="array",
+                        items={"type": "string"}, title="证券代码",
+                        description="每行输入一个证券代码，例如 600519.SH。"),
+    },
     tags=["openfinance", "annual-report", "cninfo", "rag"],
 )
 def annual_report_pipeline():

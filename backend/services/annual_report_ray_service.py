@@ -125,7 +125,12 @@ class AnnualReportRayService:
         env_vars["ANNUAL_REPORT_RAY_MANIFESTS"] = json.dumps(manifest_paths, ensure_ascii=False)
         env_vars["ANNUAL_REPORT_RAY_FORCE"] = "true" if force else "false"
         working_dir = settings.RAY_RUNTIME_WORKING_DIR.strip() or str(PROJECT_ROOT)
-        runtime_env: dict[str, Any] = {"working_dir": working_dir, "env_vars": env_vars}
+        runtime_env: dict[str, Any] = {
+            "working_dir": working_dir,
+            "env_vars": env_vars,
+            # Runtime jobs only need source code, not local backups, images or secrets.
+            "excludes": ["/output/", "/*.tar", "/.env", "/.env.*", "/.git/", "/.cache/", "/.pytest_cache/"],
+        }
         packages = self._runtime_pip_packages()
         if packages:
             runtime_env["pip"] = {"packages": packages, "pip_check": False}

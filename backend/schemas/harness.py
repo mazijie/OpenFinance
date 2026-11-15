@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 AgentMode = Literal["standard", "deep"]
-AgentRunKind = Literal["interactive", "monitor"]
+AgentRunKind = Literal["interactive"]
 TaskType = Literal["query", "analysis", "research", "decision_support"]
 TaskComplexity = Literal["simple", "medium", "complex"]
 TaskRisk = Literal["low", "medium", "high"]
@@ -25,7 +25,7 @@ AgentTurnStatus = Literal[
     "failed",
     "cancelled",
 ]
-AgentMessageKind = Literal["text", "tool", "approval", "monitor_report", "system"]
+AgentMessageKind = Literal["text", "tool", "approval", "system"]
 AgentEventType = Literal[
     "turn.started",
     "task.analyzed",
@@ -38,12 +38,11 @@ AgentEventType = Literal[
     "approval.required",
     "message.delta",
     "message.completed",
-    "monitor.queued",
     "turn.completed",
     "turn.cancelled",
     "turn.failed",
 ]
-EvidenceSourceType = Literal["market", "news", "annual_report", "web", "monitor_report"]
+EvidenceSourceType = Literal["market", "news", "annual_report", "web"]
 
 
 def _utc(value: datetime | str) -> datetime:
@@ -61,6 +60,7 @@ class AgentCitation(BaseModel):
     fetched_at: datetime | None = None
     locator: str | None = None
     excerpt: str | None = None
+    content_type: str | None = None
 
     report_id: str | None = None
     page_start: int | None = None
@@ -269,4 +269,3 @@ class WebDocument(BaseModel):
     content_hash: str
     fetched_at: datetime
     metadata: dict[str, Any] = Field(default_factory=dict)
-

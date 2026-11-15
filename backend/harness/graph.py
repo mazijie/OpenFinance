@@ -74,7 +74,7 @@ SYSTEM_PROMPT = """你是 OpenFinance 的统一投研 Agent。
 
 规则：
 1. 先解析证券，再使用 research_search 取证。内部湖仓优先，网页只能通过白名单工具访问。
-2. 不要编造价格、财务数字、新闻、公告或网页内容。
+2. 不要编造价格、财务数字、新闻、公告或网页内容。全市场排名和筛选使用 market_screen；单股综合概览可使用 stock_overview。
 3. 普通查询可直接回答；涉及公司事件、异动原因、经营变化或建议时，应组合行情、新闻和年报证据。
 4. 网页只用于交互研究；定时监测运行禁止网页。
 5. 写操作（监护清单、阈值、提交监测）必须先提案，系统会暂停等待用户确认。
@@ -672,15 +672,6 @@ class HarnessGraph:
                     "summary": _summarize_tool_result(summary),
                 },
             )
-            if tool_name == "submit_monitor_run" and summary.get("run_id"):
-                self._emit(
-                    "monitor.queued",
-                    {
-                        "run_id": summary.get("run_id"),
-                        "thread_id": self.thread_id,
-                        "status": summary.get("status"),
-                    },
-                )
             return ToolMessage(content=content, tool_call_id=call_id, name=tool_name)
         except Exception as exc:
             self.store.record_tool_call(
@@ -934,13 +925,5 @@ def _model_failure_answer(
 
 
 def _action_summary(tool_name: str, args: dict[str, Any]) -> str:
-    if tool_name == "add_watchlist_item":
-        return f"将 {args.get('symbol')} 加入监护清单"
-    if tool_name == "update_watchlist_item":
-        return f"更新 {args.get('symbol')} 的监护设置"
-    if tool_name == "delete_watchlist_item":
-        return f"从监护清单移除 {args.get('symbol')}"
-    if tool_name == "submit_monitor_run":
-        return "提交一次收盘后投研监测任务"
     return f"执行 {tool_name}"
 

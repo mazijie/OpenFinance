@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import time as time_module
 
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, time
@@ -65,6 +66,7 @@ class FinanceBronzeToSilverPipeline:
     def process_objects(self, object_paths: list[str], *, check_lease: Callable[[], None] | None = None) -> FinancePipelineStats:
         """Normalize a whole Bronze batch and commit each Silver table once."""
 
+        process_started = time_module.monotonic()
         paths = list(
             dict.fromkeys(
                 str(path).strip()
@@ -111,17 +113,30 @@ class FinanceBronzeToSilverPipeline:
             ),
         )
         stats.duplicate_count += security_duplicates + calendar_duplicates + daily_duplicates
+        preparation_seconds = time_module.monotonic() - process_started
 
         if check_lease: check_lease()
+        stage_started = time_module.monotonic()
+        logger.info("Writing finance security master", extra_fields={"record_count": len(security_records)})
         stats.written_security_master = self.finance_writer.append_security_master(security_records)
+        security_seconds = time_module.monotonic() - stage_started
         if check_lease: check_lease()
+        stage_started = time_module.monotonic()
+        logger.info("Writing finance trading calendar", extra_fields={"record_count": len(calendar_records)})
         stats.written_trading_calendar = self.finance_writer.append_trading_calendar(calendar_records)
+        calendar_seconds = time_module.monotonic() - stage_started
         if check_lease: check_lease()
+        stage_started = time_module.monotonic()
+        logger.info("Writing finance daily bars", extra_fields={"record_count": len(daily_records)})
         stats.written_daily_bars = self.finance_writer.append_daily_bars(daily_records)
+        daily_seconds = time_module.monotonic() - stage_started
         logger.info(
             "Finance Bronze to Silver completed",
             event="finance_bronze_to_silver_completed",
-            extra_fields=stats.to_dict(),
+            extra_fields={**stats.to_dict(), "security_seconds": round(security_seconds, 3),
+                          "calendar_seconds": round(calendar_seconds, 3), "daily_seconds": round(daily_seconds, 3),
+                          "preparation_seconds": round(preparation_seconds, 3),
+                          "total_seconds": round(time_module.monotonic() - process_started, 3)},
         )
         return stats
 
@@ -141,6 +156,12 @@ class FinanceBronzeToSilverPipeline:
         security_master_payload = list(bronze_object.raw_response.get("security_master") or [])
         calendar_payload = list(bronze_object.raw_response.get("trading_calendar") or [])
         daily_bars_payload = list(bronze_object.raw_response.get("daily_bars") or [])
+        if str(bronze_object.provider).lower() == "baostock" and (security_master_payload or daily_bars_payload):
+            raise ValueError("BaoStock security and daily-bar replay is disabled; preserve calendar-only data separately")
+        if daily_bars_payload:
+            requested = str(bronze_object.request_params.get("adjustment_type") or "").lower()
+            if requested != "none" or any(str(row.get("adjustment_type") or requested).lower() != "none" for row in daily_bars_payload):
+                raise ValueError("Only explicitly unadjusted Bronze daily bars can be normalized")
         stats.read_count = len(security_master_payload) + len(calendar_payload) + len(daily_bars_payload)
 
         security_records: list[SecurityMasterRecord] = []
@@ -260,7 +281,7 @@ class FinanceBronzeToSilverPipeline:
         self._validate_bar_prices(open_price, high_price, low_price, close_price, volume)
 
         security_id = self._normalize_security_id(row.get("security_id"), symbol, exchange)
-        adjustment_type = str(row.get("adjustment_type") or bronze_object.request_params.get("adjustment_type") or "qfq").strip().lower()
+        adjustment_type = str(row.get("adjustment_type") or bronze_object.request_params.get("adjustment_type") or "none").strip().lower()
         if adjustment_type not in {"qfq", "forward"} and min(open_price, high_price, low_price, close_price) < 0:
             raise ValueError("negative prices require forward adjustment")
         source_record_id = str(row.get("source_record_id") or f"{symbol}-{trading_date.isoformat()}-{adjustment_type}")

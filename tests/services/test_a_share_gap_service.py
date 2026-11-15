@@ -11,7 +11,8 @@ from backend.services.a_share_gap_service import AShareGapService
 @pytest.fixture(autouse=True)
 def explicit_baostock_baseline(monkeypatch):
     # Legacy BaoStock budget cases select their source independently of the default.
-    monkeypatch.setattr("backend.config.settings.FINANCE_DAILY_PROVIDER", "baostock")
+    monkeypatch.setattr("backend.config.settings.FINANCE_DAILY_PROVIDER", "tencent")
+    monkeypatch.setattr("backend.config.settings.TENCENT_DAILY_REQUEST_LIMIT", 50)
 
 
 class FakeBudget:
@@ -19,7 +20,7 @@ class FakeBudget:
         self.remaining_value = remaining_value
 
     def remaining(self, *, provider: str, daily_limit: int) -> int:
-        assert provider == "baostock"
+        assert provider in {"baostock", "tencent"}
         return self.remaining_value
 
 
@@ -97,7 +98,7 @@ def test_gap_plan_uses_one_range_per_symbol(monkeypatch) -> None:
     )
 
     result = service.plan(
-        adjustment_type="qfq",
+        adjustment_type="none",
         lookback_days=1,
         end_date=date(2026, 1, 5),
     )
@@ -106,7 +107,7 @@ def test_gap_plan_uses_one_range_per_symbol(monkeypatch) -> None:
     assert result["missing_pair_count"] == 1
     assert result["selected_symbol_count"] == 1
     assert result["pending_symbol_count"] == 0
-    assert result["estimated_requests"] == 2
+    assert result["estimated_requests"] == 1
     assert result["plans"] == [
         {
             "symbol": "000002.SZ",
@@ -124,12 +125,12 @@ def test_gap_plan_returns_quota_exhausted_without_requesting_api(monkeypatch) ->
     service = AShareGapService(
         writer=FakeWriter(),
         provider=object(),
-        budget_store=FakeBudget(1),
+        budget_store=FakeBudget(0),
         universe_cache=FakeUniverseCache(),
     )
 
     result = service.plan(
-        adjustment_type="qfq",
+        adjustment_type="none",
         lookback_days=1,
         end_date=date(2026, 1, 5),
     )
@@ -152,7 +153,7 @@ def test_gap_plan_does_not_refresh_calendar_when_closed_day_is_latest(monkeypatc
     )
 
     result = service.plan(
-        adjustment_type="qfq",
+        adjustment_type="none",
         lookback_days=2,
         end_date=date(2026, 1, 6),
     )
@@ -184,7 +185,7 @@ def test_missing_listing_date_does_not_report_complete() -> None:
     writer.actual.add(("000002.SZ", date(2026, 1, 5)))
     service = AShareGapService(writer=writer, provider=object(), budget_store=FakeBudget(10), universe_cache=FakeUniverseCache())
     result = service.plan(lookback_days=1, end_date=date(2026, 1, 5))
-    assert result["status"] == "metadata_incomplete"
+    assert result["status"] == "partial_metadata"
 
 
 def test_tencent_plan_keeps_metadata_budget_and_cache_separate(monkeypatch):
@@ -193,7 +194,7 @@ def test_tencent_plan_keeps_metadata_budget_and_cache_separate(monkeypatch):
     monkeypatch.setattr(settings, "TENCENT_DAILY_REQUEST_LIMIT", 0)
     class Cache(FakeUniverseCache):
         def get(self, *, provider, as_of_date):
-            assert provider == "baostock"
+            assert provider in {"baostock", "tencent"}
             return super().get(provider=provider, as_of_date=as_of_date)
     class Writer(FakeWriter):
         def scan_daily_bar_keys(self, **kw):

@@ -1,0 +1,6 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>分时数据运维 · OpenFinance</title><link rel="stylesheet" href="/static/operations.css?v=workspace-2"><script src="/static/operations.js?v=1" defer></script></head>
+<body><header><div><strong>OpenFinance</strong><span>数据运维</span></div><a href="/ui">返回行情</a></header>
+<main><section class="card"><h1>当日分时补录</h1><p>手动检查缺口并补录。每批最多请求 10 只股票，腾讯请求间隔至少 30 秒。</p><p id="pause" role="status"></p><div class="actions"><form id="single"><label for="symbol">证券代码（含交易所后缀）</label><div><input id="symbol" placeholder="例如 000001.SZ" maxlength="16" required><button type="submit">补录指定证券</button></div></form><div><span class="label">全市场缺口</span><button id="batch" type="button" class="secondary">补录一批（最多 10 只）</button></div></div><p id="message" role="status" aria-live="polite"></p></section>
+<section class="card"><div class="section-head"><h2>最近任务</h2><button id="refresh" class="secondary" type="button">刷新</button></div><div id="runs" aria-live="polite">正在加载…</div></section></main></body></html>

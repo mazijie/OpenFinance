@@ -25,7 +25,7 @@ def row(day="2026-11-04", *, negative=False):
     return [day, *prices, "20", {}, "1.25", "3.5", ""]
 
 
-def response(request, bars=None, *, key="qfqday", status=200):
+def response(request, bars=None, *, key="day", status=200):
     code = request.url.params["param"].split(",")[0]
     return httpx.Response(status, json={"code": 0, "data": {code: {key: [row()] if bars is None else bars}}})
 
@@ -36,7 +36,7 @@ def fetch(provider, **kw):
                                     end_date=kw.pop("end_date", date(2026, 11, 4)), **kw)
 
 
-@pytest.mark.parametrize("adjust,key", [("qfq", "qfqday"), ("hfq", "hfqday"), ("none", "day"), ("qfq", "day")])
+@pytest.mark.parametrize("adjust,key", [("none", "day")])
 def test_adjustments_and_optional_fields(adjust, key):
     with httpx.Client(transport=httpx.MockTransport(lambda req: response(req, key=key))) as client:
         bars = fetch(TencentDailyBarsProvider(client=client), adjustment_type=adjust)
@@ -78,11 +78,13 @@ def test_empty_response_never_synthesizes_a_bar():
         assert fetch(TencentDailyBarsProvider(client=client)) == []
 
 
-def test_negative_forward_adjusted_prices_are_valid():
+def test_adjusted_or_negative_prices_are_rejected():
     with httpx.Client(transport=httpx.MockTransport(lambda req: response(req, [row(negative=True)]))) as client:
-        assert fetch(TencentDailyBarsProvider(client=client))[0].close == -9
         with pytest.raises(FinanceProviderError):
             fetch(TencentDailyBarsProvider(client=client), adjustment_type="none")
+        for adjustment in ("qfq", "hfq"):
+            with pytest.raises(FinanceProviderError):
+                fetch(TencentDailyBarsProvider(client=client), adjustment_type=adjustment)
 
 
 @pytest.mark.parametrize("failure", [429, 503, "timeout"])

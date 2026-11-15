@@ -186,7 +186,7 @@ class EvidenceService:
                     published_at=article.get("published_at"),
                     locator=str(article.get("content_hash") or ""),
                     score=article.get("final_score"),
-                    metadata={"provider": article.get("provider"), "source_name": article.get("source_name")},
+                    metadata={"provider": article.get("provider"), "source_name": article.get("source_name"), **dict(article.get("metadata") or {})},
                 )
             )
         return documents, list(data.get("warnings") or [])
@@ -318,6 +318,7 @@ def assign_citations(documents: Iterable[EvidenceDocument]) -> tuple[list[Eviden
                 fetched_at=document.fetched_at,
                 locator=document.locator,
                 excerpt=document.text[:1200],
+                content_type=document.metadata.get("content_type"),
                 report_id=document.metadata.get("report_id"),
                 page_start=document.metadata.get("page_start"),
                 page_end=document.metadata.get("page_end"),
@@ -330,4 +331,3 @@ def assign_citations(documents: Iterable[EvidenceDocument]) -> tuple[list[Eviden
 
 def _evidence_id(source_type: str, source_id: str, text: str) -> str:
     return hashlib.sha256(f"{source_type}|{source_id}|{text}".encode("utf-8")).hexdigest()
-

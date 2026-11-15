@@ -20,6 +20,7 @@ def build_ir_chunks(ir: dict, *, report_id: str, parse_run_id: str) -> list[Annu
     if size <= 0 or not 0 <= overlap < size:
         raise ValueError("Chunk size must be positive and overlap smaller than chunk size")
     chunks: list[AnnualReportChunkRecord] = []
+    chunk_occurrences: dict[str, int] = {}
     section_path = "报告正文"
     headings: list[tuple[int, str]] = []
     paragraph_parts: list[tuple[str, str, int]] = []
@@ -29,8 +30,13 @@ def build_ir_chunks(ir: dict, *, report_id: str, parse_run_id: str) -> list[Annu
             return
         unique_ids = list(dict.fromkeys(region_ids))
         content_hash = sha256_text(f"{parse_run_id}|{content_type}|{section_path}|{first_page}|{last_page}|{unique_ids}|{text}")
+        occurrence = chunk_occurrences.get(content_hash, 0)
+        chunk_occurrences[content_hash] = occurrence + 1
+        # Identical table fragments can occur more than once in one region.
+        # Keep every fragment while giving repeated occurrences stable keys.
+        chunk_key = content_hash if occurrence == 0 else f"{content_hash}:occurrence:{occurrence}"
         chunks.append(AnnualReportChunkRecord(
-            chunk_id=str(uuid5(NAMESPACE_URL, content_hash)), report_id=report_id,
+            chunk_id=str(uuid5(NAMESPACE_URL, chunk_key)), report_id=report_id,
             parse_run_id=parse_run_id, section_path=section_path, content_type=content_type,
             page_start=first_page, page_end=last_page, region_ids=unique_ids,
             chunk_text=text, content_hash=content_hash,

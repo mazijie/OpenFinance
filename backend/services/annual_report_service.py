@@ -5,7 +5,7 @@ from __future__ import annotations
 from uuid import NAMESPACE_URL, uuid5
 
 from backend.ingestion.writers.bronze_writer import BronzeWriter
-from backend.lakehouse.annual_report_writer import AnnualReportWriter
+from backend.lakehouse.starrocks_readers import StarRocksReader
 from backend.lakehouse.annual_report_visibility import committed_reports
 from backend.schemas.annual_report import (
     AnnualReportBronzeObject,
@@ -18,8 +18,10 @@ from backend.schemas.annual_report import (
 
 
 class AnnualReportService:
-    def __init__(self, writer: AnnualReportWriter | None = None, bronze_writer: BronzeWriter | None = None) -> None:
-        self.writer = writer or AnnualReportWriter()
+    def __init__(self, writer: StarRocksReader | None = None, bronze_writer: BronzeWriter | None = None) -> None:
+        if writer is None:
+            writer = StarRocksReader()
+        self.writer = writer
         self.bronze_writer = bronze_writer or BronzeWriter()
 
     def list_reports(self, *, stock_code: str | None, report_year: int | None, page: int, page_size: int) -> AnnualReportPageResult:
@@ -43,7 +45,7 @@ class AnnualReportService:
         return AnnualReportPageResult(items=items, page=page, page_size=page_size, total=total, has_next=start + page_size < total)
 
     def get_page(self, report_id: str, page_number: int) -> AnnualReportPage:
-        reports = committed_reports(self.writer.scan_reports(), self.writer.scan_parse_runs(report_id))
+        reports = committed_reports(self.writer.scan_reports(report_id), self.writer.scan_parse_runs(report_id))
         active_run = reports[report_id].parse_run_id if report_id in reports else None
         pages = [page for page in self.writer.scan_pages(report_id) if page.page_number == page_number and page.parse_run_id == active_run]
         if not pages:
@@ -52,7 +54,7 @@ class AnnualReportService:
         return AnnualReportPage(report_id=page.report_id, page_number=page.page_number, text=page.text, extraction_status=page.extraction_status, page_type=page.page_type, ir_page_path=page.ir_page_path)
 
     def get_region(self, report_id: str, region_id: str) -> AnnualReportRegion:
-        reports = committed_reports(self.writer.scan_reports(), self.writer.scan_parse_runs(report_id))
+        reports = committed_reports(self.writer.scan_reports(report_id), self.writer.scan_parse_runs(report_id))
         active_run = reports[report_id].parse_run_id if report_id in reports else None
         if active_run is None:
             raise LookupError("Annual report region not found")
@@ -79,7 +81,7 @@ class AnnualReportService:
                 return self.bronze_writer.read_bytes(manifest.pdf_object_path)
         # Keep a Silver fallback for historical rows whose manifest catalog is
         # temporarily unavailable, while the normal path remains Bronze-first.
-        reports = committed_reports(self.writer.scan_reports(), self.writer.scan_parse_runs(report_id))
+        reports = committed_reports(self.writer.scan_reports(report_id), self.writer.scan_parse_runs(report_id))
         if report_id in reports:
             return self.bronze_writer.read_bytes(reports[report_id].pdf_object_path)
         raise LookupError("Annual report not found")

@@ -131,15 +131,13 @@ def read_bronze(spark: SparkSession, input_path: str) -> DataFrame:
 def normalize_daily_bars(bronze: DataFrame) -> DataFrame:
     """Explode, validate and deduplicate Bronze daily bars."""
 
+    bronze = bronze.filter(F.lower(F.col("provider")) != F.lit("baostock"))
     exploded = bronze.select(
         F.col("provider").alias("bronze_provider"),
         F.to_timestamp("ingested_at").alias("bronze_ingested_at"),
         F.col("source_version").alias("bronze_source_version"),
         F.col("payload_hash").alias("bronze_payload_hash"),
-        F.coalesce(
-            F.col("request_params.adjustment_type"),
-            F.lit("qfq"),
-        ).alias("request_adjustment_type"),
+        F.col("request_params.adjustment_type").alias("request_adjustment_type"),
         F.col("raw_object_path"),
         F.explode("raw_response.daily_bars").alias("bar"),
     ).select("bronze_provider", "bronze_ingested_at", "bronze_source_version", "bronze_payload_hash", "request_adjustment_type", "raw_object_path", "bar.*")
@@ -164,7 +162,6 @@ def normalize_daily_bars(bronze: DataFrame) -> DataFrame:
                 F.coalesce(
                     F.nullif(F.trim("adjustment_type"), F.lit("")),
                     F.col("request_adjustment_type"),
-                    F.lit("qfq"),
                 )
             ),
         )
@@ -240,7 +237,7 @@ def normalize_daily_bars(bronze: DataFrame) -> DataFrame:
         & (F.col("low") <= F.least("open", "high", "close"))
     )
 
-    valid = normalized.filter(required_values_present & valid_numbers & valid_ohlc)
+    valid = normalized.filter(required_values_present & valid_numbers & valid_ohlc & (F.col("request_adjustment_type") == "none") & (F.col("adjustment_type") == "none"))
     business_key = [
         "provider",
         "adjustment_type",

@@ -20,7 +20,7 @@ def _trading_day(trading_date: str) -> dict[str, object]:
     base = os.getenv("OPENFINANCE_INTERNAL_API_BASE_URL", "http://backend:8000").rstrip("/")
     token = os.getenv("OPENFINANCE_INTERNAL_API_TOKEN", "").strip()
     request = Request(
-        f"{base}/internal/jobs/investment-monitor/trading-day?{urlencode({'trading_date': trading_date})}",
+        f"{base}/internal/jobs/trading-day?{urlencode({'trading_date': trading_date})}",
         headers={"X-OpenFinance-Token": token},
     )
     with urlopen(request, timeout=30) as response:
@@ -35,7 +35,7 @@ def _trading_day(trading_date: str) -> dict[str, object]:
     catchup=False,
     max_active_runs=1,
     default_args={"owner": "openfinance", "retries": 0, "retry_delay": timedelta(minutes=10)},
-    tags=["openfinance", "spark", "gold", "investment-monitor"],
+    tags=["openfinance", "spark", "gold"],
 )
 def gold_metrics_pipeline():
     @task
