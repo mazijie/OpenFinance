@@ -10,6 +10,7 @@ from threading import Thread
 from realtime.tencent import CHINA, collect_round
 from realtime.indices import collect_indices
 from realtime.quote_metrics import persist_quote_metrics
+from realtime.intraday_backfill import record_universe
 
 log = logging.getLogger(__name__)
 
@@ -180,6 +181,11 @@ def main():
             status = "incomplete" if failed_batches or any(item.get("status") in ("missing", "unsupported") for item in items) else "published"
             record_round(os.environ["DATABASE_URL"], minute, status, expected=expected,
                          failed_batches=failed_batches, acknowledged=acknowledged)
+            if mode == "live":
+                try:
+                    record_universe(os.environ["DATABASE_URL"], minute.date(), items)
+                except Exception:
+                    log.exception("could not record intraday universe for backfill")
             log.info("published round %s records=%d", minute.isoformat(), len(pending))
         except Exception as exc:
             log.exception("snapshot collection failed; next round will be attempted")

@@ -28,13 +28,15 @@ def test_intraday_requires_exchange_and_returns_sample_windows(monkeypatch):
 
     class Result:
         def fetchall(self): return points
+        def fetchone(self): return None
 
     class Connection:
         def __enter__(self): return self
         def __exit__(self, *args): pass
         def execute(self, sql, params):
-            assert "window_basis='capture_time'" in sql
-            assert params == (["600519.SH"], now, now)
+            if "WITH points AS" in sql:
+                assert "window_basis='capture_time'" in sql
+                assert params == (["600519.SH"], now, ["600519.SH"], now, now)
             return Result()
 
     monkeypatch.setattr("backend.services.realtime_quote_service.psycopg.connect", lambda *a, **kw: Connection())

@@ -680,6 +680,19 @@ services:
       OPENFINANCE_INTERNAL_API_TOKEN: ${OPENFINANCE_INTERNAL_API_TOKEN:-replace-with-a-shared-internal-token}
     command: ["python", "-m", "realtime.collector"]
     restart: unless-stopped
+  quote-backfill:
+    build:
+      context: .
+      dockerfile: realtime/Dockerfile
+    depends_on:
+      kafka: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+      backend: {condition: service_started}
+    environment:
+      DATABASE_URL: postgresql://openfinance:openfinance@postgres:5432/openfinance
+      KAFKA_BOOTSTRAP: kafka:9092
+    command: ["python", "-m", "realtime.intraday_backfill"]
+    restart: unless-stopped
   quote-consumer:
     build:
       context: .
