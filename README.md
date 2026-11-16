@@ -12,8 +12,6 @@ OpenFinance is an open-source research platform for China’s financial markets.
 - **Data processing:** Stores raw data in MinIO Bronze, curated tables in Iceberg Silver, and calculated daily indicators in Gold. Airflow schedules ingestion and processing; Spark builds and maintains analytical tables.
 - **Live quotes:** A Kafka and Flink pipeline collects market snapshots; its windows are sampled statistics, not tick-by-tick trades.
 
-The research agent can search approved public websites when internal sources do not provide evidence. Web access is restricted to HTTPS and configured allowlisted domains. Market-data APIs read the local lakehouse and do not contact providers at query time.
-
 ## Deploy with Docker Compose
 
 ### Requirements
