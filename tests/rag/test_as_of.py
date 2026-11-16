@@ -3,8 +3,8 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
 
-from backend.rag.lexical_store import OpenSearchNewsStore
-from backend.rag.vector_store import PgVectorNewsStore
+from backend.rag.news.lexical_store import OpenSearchNewsStore
+from backend.rag.news.vector_store import PgVectorNewsStore
 
 
 class FakeCursor:

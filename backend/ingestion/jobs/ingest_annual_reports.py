@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 
 from backend.config import settings
-from backend.ingestion.collectors.cninfo import CNInfoCollector
+from backend.providers.cninfo import CNInfoCollector
 from backend.ingestion.writers.bronze_writer import BronzeWriter, BronzeWriterError
 from backend.pipelines.annual_report_pipeline_state import AnnualReportPipelineStateStore
 from backend.schemas.annual_report import AnnualReportBronzeObject, AnnualReportAnnouncement

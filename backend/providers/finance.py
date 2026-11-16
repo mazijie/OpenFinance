@@ -58,7 +58,7 @@ class BaoStockFinanceProvider(BaseFinanceProvider):
             self.client = client
             return
         if self.budget_store is None:
-            from backend.lakehouse.api_request_budget import ApiRequestBudgetStore
+            from backend.job_store.api_request_budget import ApiRequestBudgetStore
 
             self.budget_store = ApiRequestBudgetStore()
         try:  # pragma: no cover - optional dependency

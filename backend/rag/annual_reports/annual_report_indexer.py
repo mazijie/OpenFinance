@@ -9,10 +9,10 @@ from contextlib import contextmanager
 from backend.config import settings
 from backend.lakehouse.annual_report_writer import AnnualReportWriter
 from backend.pipelines.annual_report_pipeline_state import AnnualReportPipelineStateStore, StageLease
-from backend.rag.annual_report_store import AnnualReportVectorStore
-from backend.rag.annual_report_lexical_store import AnnualReportLexicalStore
+from backend.rag.annual_reports.annual_report_store import AnnualReportVectorStore
+from backend.rag.annual_reports.annual_report_lexical_store import AnnualReportLexicalStore
 from backend.lakehouse.annual_report_visibility import committed_reports
-from backend.rag.embeddings import EmbeddingService
+from backend.rag.common.embeddings import EmbeddingService
 from backend.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -26,7 +26,7 @@ class AnnualReportRAGIndexer:
         if writer is not None:
             self.writer = writer
         elif settings.ANNUAL_REPORT_INDEX_READER == "starrocks":
-            from backend.rag.annual_report_index_reader import StarRocksAnnualReportIndexReader
+            from backend.rag.annual_reports.annual_report_index_reader import StarRocksAnnualReportIndexReader
             self.writer = StarRocksAnnualReportIndexReader()
         else:
             self.writer = AnnualReportWriter()

@@ -9,7 +9,6 @@ from typing import AsyncIterator
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
-from backend.config import settings
 from backend.api.llm_credentials import LLMCredentials, require_llm_credentials
 from backend.harness.service import AgentHarness, HarnessService
 from backend.schemas.harness import (
@@ -35,17 +34,11 @@ def get_harness_service() -> HarnessService:
     return AgentHarness()
 
 
-def _require_harness() -> None:
-    if not settings.HARNESS_V1_ENABLED:
-        raise HTTPException(status_code=503, detail="Unified agent harness is disabled")
-
-
 @router.get("/threads", response_model=list[AgentThread])
 def list_threads(
     include_archived: bool = Query(default=False),
     service: HarnessService = Depends(get_harness_service),
 ) -> list[AgentThread]:
-    _require_harness()
     return service.list_threads(include_archived=include_archived)
 
 
@@ -54,7 +47,6 @@ def create_thread(
     request: AgentThreadCreate,
     service: HarnessService = Depends(get_harness_service),
 ) -> AgentThread:
-    _require_harness()
     return service.create_thread(request.title)
 
 
@@ -63,7 +55,6 @@ def get_thread(
     thread_id: str,
     service: HarnessService = Depends(get_harness_service),
 ) -> AgentThread:
-    _require_harness()
     try:
         value = service.get_thread(thread_id)
     except ValueError as exc:
@@ -79,7 +70,6 @@ def update_thread(
     request: AgentThreadUpdate,
     service: HarnessService = Depends(get_harness_service),
 ) -> AgentThread:
-    _require_harness()
     value = service.update_thread(thread_id, title=request.title, status=request.status)
     if value is None:
         raise HTTPException(status_code=404, detail="Thread not found")
@@ -91,7 +81,6 @@ def delete_thread(
     thread_id: str,
     service: HarnessService = Depends(get_harness_service),
 ) -> None:
-    _require_harness()
     if not service.delete_thread(thread_id):
         raise HTTPException(status_code=404, detail="Thread not found")
 
@@ -103,7 +92,6 @@ def list_messages(
     limit: int = Query(default=100, ge=1, le=200),
     service: HarnessService = Depends(get_harness_service),
 ) -> list[AgentMessage]:
-    _require_harness()
     try:
         return service.list_messages(thread_id, after_seq=after_seq, limit=limit)
     except ValueError as exc:
@@ -116,7 +104,6 @@ def list_events(
     after_seq: int = Query(default=0, ge=0),
     service: HarnessService = Depends(get_harness_service),
 ) -> list[AgentEvent]:
-    _require_harness()
     return service.list_events(thread_id, after_seq=after_seq)
 
 
@@ -127,7 +114,6 @@ def create_turn(
     credentials: LLMCredentials = Depends(require_llm_credentials),
     service: HarnessService = Depends(get_harness_service),
 ) -> StreamingResponse:
-    _require_harness()
     try:
         turn = service.start_turn(thread_id, request)
     except LookupError as exc:
@@ -156,7 +142,6 @@ def resume_approval(
     credentials: LLMCredentials = Depends(require_llm_credentials),
     service: HarnessService = Depends(get_harness_service),
 ) -> StreamingResponse:
-    _require_harness()
     try:
         approval = service.store.get_approval(approval_id)
     except ValueError as exc:
@@ -186,7 +171,6 @@ def cancel_turn(
     turn_id: str,
     service: HarnessService = Depends(get_harness_service),
 ) -> AgentTurn:
-    _require_harness()
     try:
         return service.cancel_turn(thread_id, turn_id)
     except LookupError as exc:
@@ -198,7 +182,6 @@ def get_run_detail(
     turn_id: str,
     service: HarnessService = Depends(get_harness_service),
 ) -> AgentTurnDetail:
-    _require_harness()
     try:
         return service.run_detail(turn_id)
     except (LookupError, ValueError) as exc:
@@ -209,7 +192,6 @@ def get_run_detail(
 def list_web_domains(
     service: HarnessService = Depends(get_harness_service),
 ) -> list[WebDomain]:
-    _require_harness()
     return service.store.list_web_domains()
 
 
@@ -218,7 +200,6 @@ def add_web_domain(
     request: WebDomainCreate,
     service: HarnessService = Depends(get_harness_service),
 ) -> WebDomain:
-    _require_harness()
     return service.store.add_web_domain(request.host_pattern)
 
 
@@ -227,7 +208,6 @@ def delete_web_domain(
     host_pattern: str,
     service: HarnessService = Depends(get_harness_service),
 ) -> None:
-    _require_harness()
     if not service.store.delete_web_domain(host_pattern):
         raise HTTPException(status_code=404, detail="Web domain not found")
 
@@ -238,7 +218,6 @@ def update_web_domain(
     request: WebDomainUpdate,
     service: HarnessService = Depends(get_harness_service),
 ) -> WebDomain:
-    _require_harness()
     domain = service.store.set_web_domain_enabled(host_pattern, request.enabled)
     if domain is None:
         raise HTTPException(status_code=404, detail="Web domain not found")

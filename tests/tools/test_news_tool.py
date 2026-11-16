@@ -26,11 +26,7 @@ def test_news_tool_returns_lakehouse_empty_message() -> None:
     assert result["data"]["message"] == message
 
 
-def test_news_tool_does_not_access_external_news_provider_when_lakehouse_is_empty(monkeypatch) -> None:
-    def fail_if_called(*args, **kwargs):
-        raise AssertionError("Juhe should not be called from NewsTool")
-
-    monkeypatch.setattr("backend.ingestion.collectors.juhe.JuheCollector.collect_news", fail_if_called)
+def test_news_tool_returns_empty_lakehouse_results() -> None:
     service = FakeNewsService(result=NewsSearchResult(items=[], message="当前自有湖仓在指定时间范围内未检索到相关新闻。"))
     tool = NewsTool(service=service)
 

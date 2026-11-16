@@ -13,7 +13,7 @@ from backend.ingestion.writers.bronze_writer import BronzeWriter
 from backend.ingestion.writers.derived_writer import DerivedWriter
 from backend.lakehouse.annual_report_writer import AnnualReportWriter
 from backend.pipelines.annual_report_pipeline_state import AnnualReportPipelineStateStore, StageLease
-from backend.rag.annual_report_chunking import build_ir_chunks
+from backend.rag.annual_reports.annual_report_chunking import build_ir_chunks
 from backend.schemas.annual_report import (
     AnnualReportPageRecord,
     AnnualReportParseRunRecord,

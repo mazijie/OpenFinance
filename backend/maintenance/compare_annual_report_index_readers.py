@@ -7,7 +7,7 @@ import json
 import time
 from collections import Counter
 
-from backend.rag.annual_report_index_reader import FIELDS, StarRocksAnnualReportIndexReader
+from backend.rag.annual_reports.annual_report_index_reader import FIELDS, StarRocksAnnualReportIndexReader
 
 
 def _hashes(rows):

@@ -25,7 +25,7 @@
 ### 新闻与年报检索
 
 - 采集财新数据通最新财经新闻摘要，保留原始响应、发布时间和原文链接；历史聚合数据仍可读取
-- 默认每 30 分钟采集上游返回的全部有效新摘要。上游只提供最新列表，停机或更新过快可能漏采，无法保证历史回填；时间窗口参数仅记录在 Bronze 中，不能限制上游结果。旧的 `NEWS_INGEST_LIMIT` 配置及采集接口的 `limit` 参数不再限制采集数量
+- 默认每 30 分钟采集上游返回的全部有效新摘要。上游只提供最新列表，停机或更新过快可能漏采，无法保证历史回填；时间窗口参数仅记录在 Bronze 中，不能限制上游结果。采集接口不提供数量限制参数
 - 检查 `caixin_collect_completed` 日志中的获取、无效、重复和入库候选数量，结合 Silver 和索引任务状态排查；上游返回满页时需关注漏采风险。部署环境应先核实接口访问和内容存储、索引及展示权限
 - 若 Bronze 已写入但 Silver 任务失败，采集去重会识别已有 Bronze 新闻，不会自动重新提交该对象；修复故障后，通过 `/internal/jobs/news-bronze-to-silver` 指定失败的 `object_paths` 重放，再运行 `/internal/jobs/news-rag-index`。也可用该接口重放历史聚合数据 Bronze 对象
 - 支持 PostgreSQL pgvector 与 OpenSearch 混合检索
@@ -78,4 +78,4 @@ docker exec openfinance-airflow-scheduler airflow dags trigger \
 在本地 `.env` 中设置 `RAY_DASHBOARD_URL`，指向 backend 容器可访问的远程 Ray Dashboard 地址，
 例如 `http://<ray-server-host>:8265`。Ray worker 所需的存储地址也需要按 `.env.example` 配置为远程节点可访问的地址。
 更换模式或模型时应同时更新 `PDF_PARSER_VERSION`，避免复用不兼容的解析结果。
-可选的 `legacy-parser` Compose 服务仍使用其独立的 Paddle 环境，不参与默认 Ray 链路。
+年报解析通过 Ray 执行。

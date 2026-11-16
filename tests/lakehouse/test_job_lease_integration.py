@@ -3,9 +3,9 @@ import os
 from uuid import uuid4
 
 import pytest
-from backend.lakehouse.a_share_ingestion_jobs import AShareIngestionJobStore
-from backend.lakehouse.finance_normalization_jobs import FinanceNormalizationJobStore
-from backend.lakehouse.job_lease import JobLeaseLost
+from backend.job_store.a_share_ingestion_jobs import AShareIngestionJobStore
+from backend.job_store.finance_normalization_jobs import FinanceNormalizationJobStore
+from backend.job_store.job_lease import JobLeaseLost
 
 
 @pytest.mark.parametrize("store_type", [AShareIngestionJobStore, FinanceNormalizationJobStore])

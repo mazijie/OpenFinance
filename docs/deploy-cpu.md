@@ -24,7 +24,7 @@ bash scripts/compose.sh logs --tail=100 backend embedding-init opensearch
 
 - PostgreSQL、MinIO、OpenSearch 和 Ollama 模型使用 Docker named volumes 持久化。不要用 `down -v` 删除这些数据卷。
 - `.env` 中的 `MINIO_DATA_PATH` 当前不被 Compose 引用，实际数据位置由 Docker volume 决定。
-- CPU 模式只调整 Ollama 服务。不要启用仍请求 GPU 的 `legacy-parser` profile。切换模式后重新创建 embedding 容器以应用新的运行时配置；数据卷不会删除。
+- CPU 模式只调整 Ollama 服务。切换模式后重新创建 embedding 容器以应用新的运行时配置；数据卷不会删除。
 - 年报解析默认依赖外部 Ray 与 MinerU，本配置不包含 Ray 集群，不能仅凭启动成功判断年报解析已可用。
 - 当前默认配置公开了多项存储和管理端口，且 OpenSearch 关闭认证。应通过服务器防火墙限制访问，并按 README 同步替换默认凭据。
 

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from backend.rag.annual_report_store import AnnualReportVectorStore
-from backend.rag.annual_report_lexical_store import AnnualReportLexicalStore, AnnualReportLexicalStoreError
-from backend.rag.embeddings import EmbeddingService
+from backend.rag.annual_reports.annual_report_store import AnnualReportVectorStore
+from backend.rag.annual_reports.annual_report_lexical_store import AnnualReportLexicalStore, AnnualReportLexicalStoreError
+from backend.rag.common.embeddings import EmbeddingService
 from backend.config import settings
 from backend.pipelines.annual_report_pipeline_state import AnnualReportPipelineStateStore
 from backend.schemas.rag import RagArticleResult, RagEvidence

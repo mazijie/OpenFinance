@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from backend.rag.annual_report_lexical_store import AnnualReportLexicalStore
+from backend.rag.annual_reports.annual_report_lexical_store import AnnualReportLexicalStore
 
 
 class Response:

@@ -1,4 +1,4 @@
-from backend.rag.annual_report_chunking import build_ir_chunks
+from backend.rag.annual_reports.annual_report_chunking import build_ir_chunks
 
 
 def test_structure_aware_chunks_keep_tables_atomic() -> None:

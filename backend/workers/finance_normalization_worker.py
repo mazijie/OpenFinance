@@ -5,8 +5,8 @@ from __future__ import annotations
 from threading import Event, Thread
 import time
 
-from backend.lakehouse.finance_normalization_jobs import FinanceNormalizationJobStore
-from backend.lakehouse.job_lease import JobLeaseLost
+from backend.job_store.finance_normalization_jobs import FinanceNormalizationJobStore
+from backend.job_store.job_lease import JobLeaseLost
 from backend.logging_utils import configure_logging, get_logger
 from backend.pipelines.finance_bronze_to_silver import FinanceBronzeToSilverPipeline
 

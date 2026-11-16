@@ -7,8 +7,8 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from backend.config import settings
-from backend.lakehouse.api_request_budget import ApiRequestBudgetStore
-from backend.lakehouse.a_share_universe_cache import AShareUniverseCacheStore
+from backend.job_store.api_request_budget import ApiRequestBudgetStore
+from backend.job_store.a_share_universe_cache import AShareUniverseCacheStore
 from backend.lakehouse.finance_writer import FinanceWriter
 from backend.providers.finance import BaoStockFinanceProvider
 from backend.providers.tencent_securities import TencentSecurityProvider

@@ -15,7 +15,6 @@ class IngestFinanceNewsRequest(BaseModel):
 
     start_time: datetime | None = None
     end_time: datetime | None = None
-    limit: int | None = Field(default=None, ge=1, le=500)
 
 
 class BronzeToSilverRequest(BaseModel):
@@ -77,11 +76,6 @@ class AnnualReportBronzeManifestRequest(BaseModel):
     years: list[int] = Field(min_length=1)
 
 
-class AnnualReportParseRequest(BaseModel):
-    """Request one or more Bronze manifests for parser-service processing."""
-
-    manifest_paths: list[str] = Field(min_length=1)
-    force: bool = False
 
 
 class AnnualReportRaySubmitRequest(BaseModel):

@@ -15,7 +15,7 @@ except ImportError:  # pragma: no cover - deployment dependency
     psycopg = None
 
 from backend.config import settings
-from backend.lakehouse.job_lease import JobLeaseLost
+from backend.job_store.job_lease import JobLeaseLost
 
 
 class AShareIngestionJobError(Exception):

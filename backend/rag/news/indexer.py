@@ -12,10 +12,10 @@ from uuid import NAMESPACE_URL, uuid5
 from backend.config import settings
 from backend.lakehouse.news_writer import NewsWriter
 from backend.logging_utils import get_logger
-from backend.rag.chunking import build_source_text, has_rag_value, split_text
-from backend.rag.embeddings import EmbeddingService, RagEmbeddingError
-from backend.rag.lexical_store import OpenSearchNewsStore
-from backend.rag.vector_store import PgVectorNewsStore, RagStoreError
+from backend.rag.news.chunking import build_source_text, has_rag_value, split_text
+from backend.rag.common.embeddings import EmbeddingService, RagEmbeddingError
+from backend.rag.news.lexical_store import OpenSearchNewsStore
+from backend.rag.news.vector_store import PgVectorNewsStore, RagStoreError
 from backend.schemas.news import NewsArticleRecord
 from backend.schemas.rag import RagChunkRecord, RagIndexStats
 from backend.services.security_alias_service import build_security_matcher

@@ -1,15 +1,12 @@
-"""HTTP entrypoint for the GPU PDF parser service."""
+"""PDF parser service shared by Ray workers."""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
-import threading
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
-from fastapi import FastAPI, Header, HTTPException
-from pydantic import BaseModel, Field
 
 from backend.config import settings
 from backend.ingestion.writers.bronze_writer import BronzeWriter
@@ -24,46 +21,6 @@ try:  # pragma: no cover - parser image dependency
     import fitz
 except ImportError:  # pragma: no cover
     fitz = None
-
-
-class ParseRequest(BaseModel):
-    manifest_path: str = Field(min_length=1)
-    force: bool = False
-
-
-_parse_lock = threading.Lock()
-
-
-app = FastAPI(title="OpenFinance PDF Parser", version=settings.PDF_PARSER_VERSION)
-
-
-def _check_token(value: str | None) -> None:
-    expected = settings.PDF_PARSER_TOKEN.strip()
-    if not expected or value != expected:
-        raise HTTPException(status_code=401, detail="Invalid PDF parser token")
-
-
-@app.get("/health")
-def health() -> dict[str, Any]:
-    import paddle
-
-    if not paddle.is_compiled_with_cuda() or paddle.device.cuda.device_count() < 1:
-        raise HTTPException(status_code=503, detail="A CUDA-capable Paddle runtime is required")
-    return {"status": "ok", "parser_version": settings.PDF_PARSER_VERSION, "gpu": paddle.device.cuda.get_device_name(0)}
-
-
-@app.post("/v1/parse", response_model=AnnualReportParseResult)
-def parse(request: ParseRequest, x_pdf_parser_token: str | None = Header(default=None)) -> AnnualReportParseResult:
-    _check_token(x_pdf_parser_token)
-    try:
-        with _parse_lock:
-            return PdfParserService().parse(request.manifest_path, force=request.force)
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except AnnualReportParseError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"PDF parsing failed: {exc}") from exc
 
 
 class PdfParserService:

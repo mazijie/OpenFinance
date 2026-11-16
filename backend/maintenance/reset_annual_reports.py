@@ -13,8 +13,8 @@ from backend.config import settings
 from backend.lakehouse.catalog import get_catalog
 from backend.lakehouse.annual_report_tables import ensure_annual_report_extended_tables, ensure_annual_report_tables
 from backend.lakehouse.write_coordination import iceberg_write_lock
-from backend.rag.annual_report_store import AnnualReportVectorStore
-from backend.rag.annual_report_lexical_store import AnnualReportLexicalStore
+from backend.rag.annual_reports.annual_report_store import AnnualReportVectorStore
+from backend.rag.annual_reports.annual_report_lexical_store import AnnualReportLexicalStore
 
 
 def reset_annual_reports() -> dict[str, object]:

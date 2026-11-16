@@ -110,8 +110,6 @@ class Settings(BaseSettings):
     CNINFO_REPORT_STOCKS_JSON: str = "[]"
     CNINFO_REPORT_YEARS_JSON: str = "[]"
     CNINFO_REPORT_AIRFLOW_SCHEDULE: str = "0 3 * * *"
-    PDF_PARSER_URL: str = "http://pdf-parser:8090"
-    PDF_PARSER_TOKEN: str = "replace-with-pdf-parser-token"
     PDF_PARSER_TIMEOUT_SECONDS: float = 14_400.0
     PDF_PARSER_VERSION: str = "annual-report-mineru-basic-4.0.12-v1"
     PDF_LAYOUT_ENGINE: str = "mineru"
@@ -145,18 +143,7 @@ class Settings(BaseSettings):
     RAY_JOB_POLL_SECONDS: float = 5.0
     ANNUAL_REPORT_RECOVERY_SCHEDULE: str = "15 4 * * *"
     ANNUAL_REPORT_MAX_STAGE_ATTEMPTS: int = 5
-    NEWS_DEFAULT_LIMIT: int = 50
     CAIXIN_NEWS_URL: str = "https://cxdata.caixin.com/api/dataplus/sjtPc/news"
-    # Legacy collector settings retained for historical integrations.
-    JUHE_NEWS_API_KEY: str = ""
-    JUHE_NEWS_LIST_URL: str = "https://v.juhe.cn/toutiao/index"
-    JUHE_NEWS_DETAIL_URL: str = "https://v.juhe.cn/toutiao/content"
-    JUHE_NEWS_DEFAULT_PAGE: int = 1
-    JUHE_NEWS_LIST_PAGE_SIZE: int = 20
-    JUHE_NEWS_MAX_PAGES: int = 5
-    JUHE_NEWS_DEFAULT_IS_FILTER: int = 1
-    JUHE_NEWS_FETCH_DETAILS: bool = True
-    JUHE_NEWS_POLL_INTERVAL_MINUTES: int = 30
 
     NEWS_EMPTY_RESULT_MESSAGE: str = "当前自有湖仓在指定时间范围内未检索到相关新闻。"
     NEWS_SYMBOL_ALIASES_JSON: str = Field(default="{}", alias="NEWS_SYMBOL_ALIASES")
@@ -199,14 +186,6 @@ class Settings(BaseSettings):
     RAG_RERANK_MIN_SCORE: float = 0.15
 
 
-    HARNESS_V1_ENABLED: bool = True
-    HARNESS_DYNAMIC_BUDGET_ENABLED: bool = True
-    HARNESS_STANDARD_MAX_TOOL_CALLS: int = 6
-    HARNESS_STANDARD_MAX_STEPS: int = 3
-    HARNESS_STANDARD_TIMEOUT_SECONDS: int = 60
-    HARNESS_DEEP_MAX_TOOL_CALLS: int = 12
-    HARNESS_DEEP_MAX_STEPS: int = 5
-    HARNESS_DEEP_TIMEOUT_SECONDS: int = 180
     HARNESS_BUDGET_SIMPLE_MAX_TOOL_CALLS: int = 3
     HARNESS_BUDGET_SIMPLE_MAX_STEPS: int = 2
     HARNESS_BUDGET_SIMPLE_TIMEOUT_SECONDS: int = 45

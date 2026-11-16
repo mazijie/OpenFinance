@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
-from backend.rag.citations import validate_citations
-from backend.rag.retrieval import aggregate_articles, mmr_select, reciprocal_rank_fusion
+from backend.rag.common.citations import validate_citations
+from backend.rag.common.retrieval import aggregate_articles, mmr_select, reciprocal_rank_fusion
 from backend.schemas.rag import RagSearchHit
 
 

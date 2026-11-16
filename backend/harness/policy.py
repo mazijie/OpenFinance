@@ -33,24 +33,6 @@ class PolicyGuard:
     """Enforce tool, data-source, and budget policy per run kind."""
 
     @staticmethod
-    def budget(mode: str) -> HarnessBudget:
-        """Return the legacy fixed budget used when dynamic budgeting is disabled."""
-
-        if mode == "deep":
-            return HarnessBudget(
-                max_tool_calls=settings.HARNESS_DEEP_MAX_TOOL_CALLS,
-                max_steps=settings.HARNESS_DEEP_MAX_STEPS,
-                timeout_seconds=settings.HARNESS_DEEP_TIMEOUT_SECONDS,
-                max_parallel_tools=settings.HARNESS_MAX_PARALLEL_TOOLS,
-            )
-        return HarnessBudget(
-            max_tool_calls=settings.HARNESS_STANDARD_MAX_TOOL_CALLS,
-            max_steps=settings.HARNESS_STANDARD_MAX_STEPS,
-            timeout_seconds=settings.HARNESS_STANDARD_TIMEOUT_SECONDS,
-            max_parallel_tools=settings.HARNESS_MAX_PARALLEL_TOOLS,
-        )
-
-    @staticmethod
     def tier_budget(tier: str) -> HarnessBudget:
         limits = {
             "simple": (

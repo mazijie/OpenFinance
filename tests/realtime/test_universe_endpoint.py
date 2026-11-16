@@ -6,7 +6,7 @@ from backend.main import app
 
 def test_realtime_universe_refresh_and_stale_fallback(monkeypatch):
     from backend.config import settings
-    from backend.lakehouse.a_share_universe_cache import AShareUniverseCacheStore
+    from backend.job_store.a_share_universe_cache import AShareUniverseCacheStore
     from backend.providers.tencent_securities import TencentSecurityProvider
 
     monkeypatch.setattr(settings, 'OPENFINANCE_INTERNAL_API_TOKEN', 'test-token')

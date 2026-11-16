@@ -74,11 +74,7 @@ class HarnessService:
         thread = self.store.get_thread(thread_id)
         if thread is None:
             raise LookupError("Thread not found")
-        budget = (
-            PolicyGuard.pending_budget(request.mode)
-            if settings.HARNESS_DYNAMIC_BUDGET_ENABLED
-            else PolicyGuard.budget(request.mode)
-        )
+        budget = PolicyGuard.pending_budget(request.mode)
         active = [
             turn
             for turn in self.store.list_turns(thread_id)
@@ -88,20 +84,19 @@ class HarnessService:
             raise RuntimeError("Thread already has an active turn")
         budget_payload = budget.to_dict()
         budget_payload["as_of"] = (request.as_of or datetime.now(UTC)).isoformat()
-        if settings.HARNESS_DYNAMIC_BUDGET_ENABLED:
-            budget_payload.update(
-                {
-                    "mode": request.mode,
-                    "dynamic": True,
-                    "budget_status": "pending",
-                    "current_tier": "medium",
-                    "initial_tier": None,
-                    "task_profile": None,
-                    "hard_limits": PolicyGuard.hard_budget(request.mode).to_dict(),
-                    "revisions": [],
-                    "stop_reason": None,
-                }
-            )
+        budget_payload.update(
+            {
+                "mode": request.mode,
+                "dynamic": True,
+                "budget_status": "pending",
+                "current_tier": "medium",
+                "initial_tier": None,
+                "task_profile": None,
+                "hard_limits": PolicyGuard.hard_budget(request.mode).to_dict(),
+                "revisions": [],
+                "stop_reason": None,
+            }
+        )
         try:
             turn = self.store.create_turn(
                 thread_id=thread_id,
@@ -202,7 +197,6 @@ class HarnessService:
             tools=tools,
             llm_factory=llm_factory,
             budget_llm_factory=budget_llm_factory,
-            dynamic_budget_enabled=settings.HARNESS_DYNAMIC_BUDGET_ENABLED,
         ).graph
         config = {"configurable": {"thread_id": thread.thread_id}}
         run_started = datetime.now(UTC).timestamp()
@@ -413,7 +407,6 @@ class HarnessService:
             tools=ToolRegistry(context=context),
             llm_factory=llm_factory,
             budget_llm_factory=budget_llm_factory,
-            dynamic_budget_enabled=settings.HARNESS_DYNAMIC_BUDGET_ENABLED,
         ).graph
         config = {"configurable": {"thread_id": thread_id}}
         final_answer = ""

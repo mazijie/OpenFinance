@@ -171,7 +171,7 @@ Docker Engine 可正常使用，但解析服务构建在 Docker Hub `nvidia/cuda
 
 **验证**
 
-`docker compose build pdf-parser` 成功。容器内 `paddle.is_compiled_with_cuda()` 为真，CUDA 设备数为 1；`/health` 返回 GPU 名称 `NVIDIA GeForce RTX 5060 Laptop GPU`。Smoke 容器已停止并清理。
+历史验证：当时 `docker compose build pdf-parser` 成功（该服务现已移除）。容器内 `paddle.is_compiled_with_cuda()` 为真，CUDA 设备数为 1；`/health` 返回 GPU 名称 `NVIDIA GeForce RTX 5060 Laptop GPU`。Smoke 容器已停止并清理。
 
 ## 2026-10-28：716 份 Bronze 回放的运行问题
 
@@ -230,7 +230,7 @@ Docker Engine 可正常使用，但解析服务构建在 Docker Hub `nvidia/cuda
 
 本机 bge-m3 embedding 保持独立运行。Ray 任务完成 Silver 后，Gold indexer 继续通过本机 embedding 服务构建 staging generation；因此 OCR 和向量化可以并行，但两者不共享同一张 GPU。
 
-Ray 节点必须安装与 Head 相同版本的 Ray 和项目代码，GPU 节点还需预装 Paddle GPU、PP-StructureV3 模型和 PDF 解析依赖。当前 Docker Compose 中的 `pdf-parser` 已归入 `legacy-parser` profile，默认回放不会启动它，避免与远程 GPU actor 重复占卡。重启 Ray worker 不会删除 Bronze、Derived 或 Silver，重新提交会按确定性页面 checkpoint 继续。
+Ray 节点必须安装与 Head 相同版本的 Ray 和项目代码，GPU 节点还需预装 Paddle GPU、PP-StructureV3 模型和 PDF 解析依赖。独立 PDF 解析服务已移除，解析由 Ray 任务执行。重启 Ray worker 不会删除 Bronze、Derived 或 Silver，重新提交会按确定性页面 checkpoint 继续。
 
 ### 部署后的远程依赖与存储检查
 

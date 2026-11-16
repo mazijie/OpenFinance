@@ -92,13 +92,6 @@ class MarketLakehouseTool(BaseTool):
         return build_success_result(payload)
 
 
-class MarketDataTool(MarketLakehouseTool):
-    """Backward-compatible alias for the old market tool name."""
-
-    name = "market_data_tool"
-    description = "Query internal lakehouse daily bars and interval summaries for a symbol or security_id."
-
-
 def validate_symbol(symbol: str) -> str:
     """Validate and normalize symbol input."""
 
@@ -138,7 +131,7 @@ def get_market_data(
 ) -> ToolResult:
     """Convenient function interface used by the agent layer."""
 
-    tool = MarketDataTool(service=service)
+    tool = MarketLakehouseTool(service=service)
     return tool.run(
         symbol=symbol,
         security_id=security_id,

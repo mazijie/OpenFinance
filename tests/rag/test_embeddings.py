@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from backend.config import settings
-from backend.rag.embeddings import EmbeddingService
+from backend.rag.common.embeddings import EmbeddingService
 
 
 class FakeResponse:
@@ -41,7 +41,7 @@ def test_local_openai_embedding_is_batched_without_api_key(monkeypatch):
     monkeypatch.setattr(settings, "EMBEDDING_DIMENSION", 1024)
     monkeypatch.setattr(settings, "EMBEDDING_BATCH_SIZE", 2)
     client = FakeClient()
-    monkeypatch.setattr("backend.rag.embeddings.httpx.Client", lambda **kwargs: client)
+    monkeypatch.setattr("backend.rag.common.embeddings.httpx.Client", lambda **kwargs: client)
 
     service = EmbeddingService()
     vectors = service.embed_documents(["新闻一", "新闻二", "新闻三"])
@@ -65,7 +65,7 @@ def test_remote_embedding_uses_optional_bearer_token(monkeypatch):
     monkeypatch.setattr(settings, "EMBEDDING_DIMENSION", 1024)
     monkeypatch.setattr(settings, "EMBEDDING_BATCH_SIZE", 16)
     client = FakeClient()
-    monkeypatch.setattr("backend.rag.embeddings.httpx.Client", lambda **kwargs: client)
+    monkeypatch.setattr("backend.rag.common.embeddings.httpx.Client", lambda **kwargs: client)
 
     service = EmbeddingService()
     service.embed_query("查询")

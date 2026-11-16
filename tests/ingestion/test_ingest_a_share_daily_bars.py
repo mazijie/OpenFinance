@@ -224,7 +224,7 @@ def test_tencent_ingestion_without_calendar_never_constructs_baostock(monkeypatc
 
 def test_lease_loss_is_not_retried_or_written():
     import pytest
-    from backend.lakehouse.job_lease import JobLeaseLost
+    from backend.job_store.job_lease import JobLeaseLost
 
     writer = FakeBronzeWriter()
     class Provider(InMemoryFinanceProvider):
