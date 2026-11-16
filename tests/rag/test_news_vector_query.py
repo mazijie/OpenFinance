@@ -1,6 +1,6 @@
 from datetime import UTC, date, datetime
 from contextlib import contextmanager
-from backend.rag.vector_store import PgVectorNewsStore
+from backend.rag.news.vector_store import PgVectorNewsStore
 
 
 def test_news_search_binds_vector_before_where_parameters():

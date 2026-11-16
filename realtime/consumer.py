@@ -5,13 +5,14 @@ import os
 import time
 
 import psycopg
-from kafka import KafkaConsumer, TopicPartition
-from kafka.structs import OffsetAndMetadata
 
 log = logging.getLogger(__name__)
 
 
 def persist(conn, topic, row):
+    if topic == "quotes.windows" and row.get("window_basis") != "capture_time":
+        log.warning("Discarding obsolete quote window without capture-time basis")
+        return
     with conn.cursor() as cur:
         if topic in ("quotes.windows", "quotes.late"):
             cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", ("openfinance_quote_window_recompute",))
@@ -52,9 +53,9 @@ def persist(conn, topic, row):
                      (openfinance.realtime_quote_windows.sample_min,openfinance.realtime_quote_windows.sample_max,
                       openfinance.realtime_quote_windows.sample_avg,openfinance.realtime_quote_windows.sample_count)
                      IS DISTINCT FROM (EXCLUDED.sample_min,EXCLUDED.sample_max,EXCLUDED.sample_avg,EXCLUDED.sample_count))
-                WHERE openfinance.realtime_quote_windows.window_basis <> 'capture_time' OR EXCLUDED.window_basis = 'capture_time'""",
+                """,
                 (row["symbol"], row["window_start"], row["window_end"], row["sample_min"], row["sample_max"], row["sample_avg"], row["sample_count"],
-                 "capture_time" if row.get("window_basis") == "capture_time" else "legacy_processing_time"))
+                 "capture_time"))
         elif topic == "quotes.late":
             cur.execute("""INSERT INTO openfinance.realtime_quote_late
                 (symbol, round_id, captured_at, window_start, price, watermark_time)
@@ -73,6 +74,9 @@ def persist(conn, topic, row):
 
 
 def main():
+    from kafka import KafkaConsumer, TopicPartition
+    from kafka.structs import OffsetAndMetadata
+
     logging.basicConfig(level=logging.INFO)
     while True:
         try:

@@ -123,7 +123,7 @@ class TencentDailyBarsProvider(BaseFinanceProvider):
                     self.check_lease()
                 if settings.TENCENT_DAILY_REQUEST_LIMIT > 0:
                     if self.budget_store is None:
-                        from backend.lakehouse.api_request_budget import ApiRequestBudgetStore
+                        from backend.job_store.api_request_budget import ApiRequestBudgetStore
                         self.budget_store = ApiRequestBudgetStore()
                     self.budget_store.reserve(provider=self.name, count=1,
                                               daily_limit=settings.TENCENT_DAILY_REQUEST_LIMIT)

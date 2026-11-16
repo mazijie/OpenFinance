@@ -3,7 +3,7 @@ from urllib.parse import parse_qs
 
 import httpx
 
-from backend.ingestion.collectors.cninfo import CNInfoCollector
+from backend.providers.cninfo import CNInfoCollector
 
 
 def test_cninfo_parser_accepts_millisecond_timestamp_and_relative_pdf_url() -> None:
@@ -83,7 +83,7 @@ def test_manual_query_resolves_and_caches_authoritative_org_id() -> None:
 
 def test_manual_query_refuses_unknown_or_ambiguous_org_id() -> None:
     import pytest
-    from backend.ingestion.collectors.cninfo import CNInfoCollectorError
+    from backend.providers.cninfo import CNInfoCollectorError
 
     def respond(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"

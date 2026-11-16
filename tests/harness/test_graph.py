@@ -217,7 +217,6 @@ def test_dynamic_budget_analyzes_task_and_stops_after_required_evidence():
         as_of=datetime(2026, 10, 25, tzinfo=UTC),
         tools=FakeTools(),
         llm_factory=lambda: FakeLLM(),
-        dynamic_budget_enabled=True,
     ).graph
 
     result = graph.invoke(

@@ -6,11 +6,11 @@ from datetime import date, datetime
 import logging
 
 from backend.config import settings
-from backend.rag.embeddings import EmbeddingService
-from backend.rag.lexical_store import OpenSearchNewsStore
-from backend.rag.reranker import CohereCompatibleReranker, Reranker
-from backend.rag.retrieval import reciprocal_rank_fusion
-from backend.rag.vector_store import PgVectorNewsStore, RagStoreError
+from backend.rag.common.embeddings import EmbeddingService
+from backend.rag.news.lexical_store import OpenSearchNewsStore
+from backend.rag.common.reranker import CohereCompatibleReranker, Reranker
+from backend.rag.common.retrieval import reciprocal_rank_fusion
+from backend.rag.news.vector_store import PgVectorNewsStore, RagStoreError
 from backend.schemas.rag import RagSearchHit
 
 

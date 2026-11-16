@@ -5,7 +5,7 @@ from datetime import UTC, date, datetime
 from backend.repositories.finance_repository import FinanceRepository
 from backend.schemas.finance import DailyBarRecord
 from backend.services.finance_service import FinanceService
-from backend.tools.market import MarketDataTool
+from backend.tools.market import MarketLakehouseTool
 
 
 class FakeFinanceWriter:
@@ -117,7 +117,7 @@ def test_market_tool_uses_internal_lakehouse_summary() -> None:
     writer = FakeFinanceWriter(_bars())
     repository = FinanceRepository(writer=writer)
     service = FinanceService(repository=repository)
-    tool = MarketDataTool(service=service)
+    tool = MarketLakehouseTool(service=service)
 
     result = tool.run(
         symbol="600519.SH",
@@ -138,7 +138,7 @@ def test_market_tool_uses_internal_lakehouse_summary() -> None:
 def test_market_tool_respects_as_of_for_revisions() -> None:
     repository = FinanceRepository(writer=FakeFinanceWriter(_bars()))
     service = FinanceService(repository=repository)
-    tool = MarketDataTool(service=service)
+    tool = MarketLakehouseTool(service=service)
 
     result = tool.run(
         symbol="600519.SH",

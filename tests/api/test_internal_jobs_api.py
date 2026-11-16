@@ -16,7 +16,7 @@ def test_queued_daily_job_freezes_selected_provider(monkeypatch):
         def create(self, payload, idempotency_key=None):
             submitted.append((payload, idempotency_key))
             return "job-1"
-    monkeypatch.setattr("backend.lakehouse.a_share_ingestion_jobs.AShareIngestionJobStore", Store)
+    monkeypatch.setattr("backend.job_store.a_share_ingestion_jobs.AShareIngestionJobStore", Store)
     monkeypatch.setattr(settings, "FINANCE_DAILY_PROVIDER", "tencent")
     monkeypatch.setattr(settings, "OPENFINANCE_INTERNAL_API_TOKEN", "internal-token")
     response = TestClient(app).post("/internal/jobs/ingest-a-share-daily-bars/submit", headers={"X-OpenFinance-Token": "internal-token"}, json={
@@ -154,7 +154,7 @@ def test_internal_a_share_universe_success(monkeypatch) -> None:
 def test_internal_a_share_coverage_success(monkeypatch) -> None:
     from backend.config import settings
 
-    fake_module = types.ModuleType("backend.lakehouse.a_share_coverage")
+    fake_module = types.ModuleType("backend.job_store.a_share_coverage")
 
     class FakeCoverageStore:
         def record_coverage(self, **kwargs):
@@ -163,7 +163,7 @@ def test_internal_a_share_coverage_success(monkeypatch) -> None:
             return True
 
     fake_module.AShareCoverageStore = FakeCoverageStore
-    monkeypatch.setitem(sys.modules, "backend.lakehouse.a_share_coverage", fake_module)
+    monkeypatch.setitem(sys.modules, "backend.job_store.a_share_coverage", fake_module)
     monkeypatch.setattr(settings, "OPENFINANCE_INTERNAL_API_TOKEN", "internal-token")
     client = TestClient(app)
 
@@ -190,11 +190,9 @@ def test_internal_ingest_job_success(monkeypatch) -> None:
                 "article_count": 3,
                 "start_time": "2026-07-17T00:00:00+00:00",
                 "end_time": "2026-07-17T06:00:00+00:00",
-                "limit": 20,
             }
 
     async def fake_ingest_finance_news(**kwargs) -> FakeResult:
-        assert kwargs["limit"] == 20
         assert kwargs["start_time"] == datetime(2026, 7, 17, 0, 0, tzinfo=UTC)
         return FakeResult()
 
@@ -209,7 +207,6 @@ def test_internal_ingest_job_success(monkeypatch) -> None:
         json={
             "start_time": "2026-07-17T00:00:00+00:00",
             "end_time": "2026-07-17T06:00:00+00:00",
-            "limit": 20,
         },
     )
 
@@ -298,7 +295,7 @@ def test_internal_bronze_to_silver_job_success(monkeypatch) -> None:
 def test_submit_and_get_finance_normalization_job(monkeypatch) -> None:
     from backend.config import settings
 
-    fake_module = types.ModuleType("backend.lakehouse.finance_normalization_jobs")
+    fake_module = types.ModuleType("backend.job_store.finance_normalization_jobs")
 
     class FakeStore:
         created_payload: dict[str, object] | None = None
@@ -312,7 +309,7 @@ def test_submit_and_get_finance_normalization_job(monkeypatch) -> None:
             return {"job_id": job_id, "status": "success", "result": {"processed_objects": 1}}
 
     fake_module.FinanceNormalizationJobStore = FakeStore
-    monkeypatch.setitem(sys.modules, "backend.lakehouse.finance_normalization_jobs", fake_module)
+    monkeypatch.setitem(sys.modules, "backend.job_store.finance_normalization_jobs", fake_module)
     monkeypatch.setattr(settings, "OPENFINANCE_INTERNAL_API_TOKEN", "internal-token")
     client = TestClient(app)
 
@@ -335,7 +332,7 @@ def test_submit_and_get_finance_normalization_job(monkeypatch) -> None:
 def test_internal_rag_index_job_success(monkeypatch) -> None:
     from backend.config import settings
 
-    fake_module = types.ModuleType("backend.rag.indexer")
+    fake_module = types.ModuleType("backend.rag.news.indexer")
 
     class FakeStats:
         def model_dump(self) -> dict[str, object]:
@@ -355,7 +352,7 @@ def test_internal_rag_index_job_success(monkeypatch) -> None:
             return FakeStats()
 
     fake_module.NewsRAGIndexer = FakeIndexer
-    monkeypatch.setitem(sys.modules, "backend.rag.indexer", fake_module)
+    monkeypatch.setitem(sys.modules, "backend.rag.news.indexer", fake_module)
     monkeypatch.setattr(settings, "OPENFINANCE_INTERNAL_API_TOKEN", "internal-token")
     client = TestClient(app)
 

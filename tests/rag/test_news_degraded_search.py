@@ -1,7 +1,7 @@
 from datetime import date
 import pytest
 
-from backend.rag.vector_store import RagStoreError
+from backend.rag.news.vector_store import RagStoreError
 from backend.repositories.rag_repository import RagRepository
 from backend.harness.evidence import EvidenceService
 

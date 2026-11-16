@@ -19,7 +19,7 @@ class PersistenceTest(unittest.TestCase):
         try:
             with psycopg.connect(dsn) as conn:
                 persist(conn, "quotes.windows", row)
-                self.assertEqual(conn.execute("SELECT window_basis FROM openfinance.realtime_quote_windows WHERE symbol=%s", (symbol,)).fetchone()[0], "legacy_processing_time")
+                self.assertIsNone(conn.execute("SELECT window_basis FROM openfinance.realtime_quote_windows WHERE symbol=%s", (symbol,)).fetchone())
                 persist(conn, "quotes.windows", {**row, "sample_avg": 12.0, "window_basis": "capture_time"})
                 persist(conn, "quotes.windows", row)
                 self.assertEqual(conn.execute("SELECT window_basis,sample_avg FROM openfinance.realtime_quote_windows WHERE symbol=%s", (symbol,)).fetchone(), ("capture_time", 12.0))

@@ -101,7 +101,6 @@ class HarnessGraph:
         llm_factory: Callable[[], LLMService],
         budget_llm_factory: Callable[[], LLMService] | None = None,
         context_manager: ContextManager | None = None,
-        dynamic_budget_enabled: bool = False,
         task_analyzer: TaskAnalyzer | None = None,
         budget_reviewer: BudgetReviewer | None = None,
         budget_controller: BudgetController | None = None,
@@ -115,7 +114,6 @@ class HarnessGraph:
         self.as_of = as_of
         self.tools = tools
         self.llm_factory = llm_factory
-        self.dynamic_budget_enabled = dynamic_budget_enabled
         self.task_analyzer = task_analyzer or TaskAnalyzer(llm_factory=budget_llm_factory)
         self.budget_reviewer = budget_reviewer or BudgetReviewer(llm_factory=budget_llm_factory)
         self.budget_controller = budget_controller or BudgetController()
@@ -131,11 +129,8 @@ class HarnessGraph:
         graph.add_node("collect_evidence", self._collect_evidence_node)
         graph.add_node("budget_control", self._budget_control_node)
         graph.add_node("synthesize", self._synthesize_node)
-        if self.dynamic_budget_enabled:
-            graph.add_edge(START, "analyze_task")
-            graph.add_edge("analyze_task", "agent")
-        else:
-            graph.add_edge(START, "agent")
+        graph.add_edge(START, "analyze_task")
+        graph.add_edge("analyze_task", "agent")
         graph.add_conditional_edges(
             "agent",
             self._route_after_agent,
@@ -147,15 +142,11 @@ class HarnessGraph:
         )
         graph.add_edge("read_tools", "collect_evidence")
         graph.add_edge("approval", "collect_evidence")
-        if self.dynamic_budget_enabled:
-            graph.add_edge("collect_evidence", "budget_control")
-            graph.add_conditional_edges(
-                "budget_control",
-                self._route_after_budget,
-                {"agent": "agent", "synthesize": "synthesize"},
-            )
-        else:
-            graph.add_edge("collect_evidence", "agent")
+        graph.add_edge("collect_evidence", "budget_control")
+        graph.add_conditional_edges(
+            "budget_control", self._route_after_budget,
+            {"agent": "agent", "synthesize": "synthesize"},
+        )
         graph.add_edge("synthesize", END)
         return graph.compile(checkpointer=self.checkpointer)
 

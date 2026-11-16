@@ -78,7 +78,7 @@ class AnnualReportVectorStore:
                 embedding vector NOT NULL,
                 content_hash text NOT NULL, embedding_model text NOT NULL, chunker_version text NOT NULL,
                 announcement_time timestamptz NOT NULL, ingested_at timestamptz NOT NULL,
-                PRIMARY KEY (generation_id, chunk_id), UNIQUE(generation_id, report_id, content_hash)
+                PRIMARY KEY (generation_id, chunk_id)
             )""")
             cur.execute(f"CREATE INDEX IF NOT EXISTS {self.table}_filters_idx ON {self.fqtn} (generation_id, stock_code, report_year)")
 

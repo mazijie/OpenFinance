@@ -214,8 +214,6 @@ services:
       EMBEDDING_MODEL: ${LOCAL_EMBEDDING_MODEL:-bge-m3}
       EMBEDDING_PATH: /embeddings
       EMBEDDING_DIMENSION: ${LOCAL_EMBEDDING_DIMENSION:-1024}
-      PDF_PARSER_URL: http://pdf-parser:8090
-      PDF_PARSER_TOKEN: ${PDF_PARSER_TOKEN:-replace-with-pdf-parser-token}
       RAY_RUNTIME_WORKING_DIR: ${RAY_RUNTIME_WORKING_DIR:-/app}
       RAY_CPU_TASK_CPUS: ${RAY_CPU_TASK_CPUS:-4}
       RAY_GPU_TASK_CPUS: ${RAY_GPU_TASK_CPUS:-4}
@@ -233,41 +231,6 @@ services:
       - -c
       - alembic upgrade head && uvicorn backend.main:app --host 0.0.0.0 --port 8000
 
-  pdf-parser:
-    profiles: ["legacy-parser"]
-    build:
-      context: .
-      dockerfile: pdf-parser/Dockerfile
-      args:
-        PDF_PARSER_BASE_IMAGE: ${PDF_PARSER_BASE_IMAGE:-docker.1ms.run/nvidia/cuda:12.9.1-cudnn-runtime-ubuntu22.04}
-        UBUNTU_MIRROR: ${UBUNTU_MIRROR:-https://archive.ubuntu.com/ubuntu}
-    container_name: openfinance-pdf-parser
-    restart: unless-stopped
-    gpus: all
-    depends_on:
-      minio-init:
-        condition: service_completed_successfully
-    env_file:
-      - .env
-    environment:
-      MINIO_ENDPOINT: minio:9000
-      MINIO_DERIVED_BUCKET: ${MINIO_DERIVED_BUCKET:-openfinance-derived}
-      PDF_PARSER_TOKEN: ${PDF_PARSER_TOKEN:-replace-with-pdf-parser-token}
-      PDF_PARSER_VERSION: ${PDF_LEGACY_PARSER_VERSION:-annual-report-parser-v1}
-      PDF_LAYOUT_ENGINE: paddle
-      PDF_RENDER_DPI: ${PDF_RENDER_DPI:-200}
-      PDF_OCR_CONFIDENCE_THRESHOLD: ${PDF_OCR_CONFIDENCE_THRESHOLD:-0.78}
-      DISABLE_MODEL_SOURCE_CHECK: "True"
-    ports:
-      - "127.0.0.1:8090:8090"
-    volumes:
-      - .:/app
-      - pdf_parser_models:/root/.paddlex
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8090/health"]
-      interval: 15s
-      timeout: 10s
-      retries: 20
 
   backend-worker:
     build:
@@ -716,4 +679,3 @@ volumes:
   airflow_logs:
   opensearch_data:
   embedding_data:
-  pdf_parser_models:

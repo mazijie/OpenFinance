@@ -11,12 +11,8 @@ class FakeFinanceService:
 
 
 def test_policy_budgets_and_tool_boundary():
-    standard = PolicyGuard.budget("standard")
-    deep = PolicyGuard.budget("deep")
     simple = PolicyGuard.tier_budget("simple")
     hard = PolicyGuard.hard_budget("standard")
-    assert standard.max_tool_calls == 6
-    assert deep.max_tool_calls == 12
     assert simple.max_tool_calls == 3
     assert hard.max_tool_calls == 20
     assert PolicyGuard.hard_budget("deep") == hard

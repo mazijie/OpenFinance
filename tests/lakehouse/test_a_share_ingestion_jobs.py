@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from backend.lakehouse.a_share_ingestion_jobs import AShareIngestionJobStore
+from backend.job_store.a_share_ingestion_jobs import AShareIngestionJobStore
 
 
 def test_payload_fingerprint_is_stable_across_key_order() -> None:

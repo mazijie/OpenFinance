@@ -5,9 +5,9 @@ import pytest
 
 from backend.ingestion.collectors.caixin import CaixinCollector, CaixinCollectorError
 from backend.pipelines.news_bronze_to_silver import NewsBronzeToSilverPipeline
-from backend.rag.chunking import build_source_text
-from backend.rag.citations import build_citation_context
-from backend.rag.retrieval import aggregate_articles
+from backend.rag.news.chunking import build_source_text
+from backend.rag.common.citations import build_citation_context
+from backend.rag.common.retrieval import aggregate_articles
 from backend.schemas.rag import RagSearchHit
 
 
@@ -23,7 +23,7 @@ async def test_collection_deduplicates_and_normalizes_for_silver() -> None:
             row("无摘要", "https://example.com/invalid", 1800000000, "")]
     transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"success": True, "data": {"data": rows}}))
     async with httpx.AsyncClient(transport=transport) as client:
-        result = await CaixinCollector(client).collect_news(limit=1)
+        result = await CaixinCollector(client).collect_news()
     assert len(result.articles) == 2
     article = result.articles[0]
     assert article.title == "旧"
@@ -36,7 +36,7 @@ async def test_collection_deduplicates_and_normalizes_for_silver() -> None:
     assert record.content is None and record.summary == "摘要"
     assert build_source_text(record) == "标题：旧\n摘要：摘要"
     async with httpx.AsyncClient(transport=transport) as client:
-        again = await CaixinCollector(client).collect_news(existing_external_ids={article.external_news_id}, limit=1)
+        again = await CaixinCollector(client).collect_news(existing_external_ids={article.external_news_id})
     assert len(again.articles) == 1
     assert again.articles[0].title == "新"
 

@@ -9,14 +9,11 @@ from typing import Any, AsyncIterator
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 
-from backend.agent.workflow import FinanceAgent
 from backend.api.agent import get_harness_service
 from backend.api.llm_credentials import LLMCredentials, require_llm_credentials
-from backend.config import settings
 from backend.harness.service import HarnessService
 from backend.schemas.chat import ChatRequest, ChatResponse
 from backend.schemas.harness import AgentTurnRequest
-from backend.services.llm import LLMService
 
 logger = logging.getLogger(__name__)
 
@@ -33,29 +30,7 @@ async def chat(
 
     logger.info("收到聊天请求: question=%s", request.question)
 
-    if settings.HARNESS_V1_ENABLED:
-        return await _chat_with_harness(request, credentials, service)
-    try:
-        finance_agent = FinanceAgent(
-            llm_service=LLMService(
-                api_key=credentials.api_key,
-                model_name=credentials.model_name,
-            )
-        )
-        result = finance_agent.run(question=request.question)
-    except Exception as exc:
-        logger.exception("Agent执行失败")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Agent execution failed: {exc}",
-        ) from exc
-
-    return ChatResponse(
-        question=result.get("question", request.question),
-        symbol=result.get("symbol"),
-        analysis=result.get("answer", ""),
-        tool_results=result.get("tool_results"),
-    )
+    return await _chat_with_harness(request, credentials, service)
 
 
 @router.post("/chat/stream")
@@ -66,11 +41,6 @@ async def chat_stream(
 ) -> StreamingResponse:
     """Stream assistant progress and the final answer as SSE."""
 
-    if not settings.HARNESS_V1_ENABLED:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Streaming chat requires the unified agent harness.",
-        )
     logger.info("收到流式聊天请求: question=%s", request.question)
     try:
         thread, turn = _start_harness_turn(request, service)

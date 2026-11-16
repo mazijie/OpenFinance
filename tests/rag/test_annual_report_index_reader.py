@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from backend.rag.annual_report_index_reader import StarRocksAnnualReportIndexReader
+from backend.rag.annual_reports.annual_report_index_reader import StarRocksAnnualReportIndexReader
 from backend.maintenance.compare_annual_report_index_readers import _hashes
 
 

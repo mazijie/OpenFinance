@@ -63,3 +63,14 @@ The Compose files are intended as a local, single-host reference deployment. The
 Issues and pull requests are welcome. For larger changes, open an [issue](https://github.com/mazijie/OpenFinance/issues) first. When submitting a [pull request](https://github.com/mazijie/OpenFinance/pulls), describe the user-visible change and include focused tests or documentation updates where appropriate. Install the Python dependencies from `requirements.txt`, then run relevant tests with `pytest -q`.
 
 This project is licensed under the [Apache License 2.0](LICENSE). It provides financial data and research tools and does not constitute investment advice.
+
+### 后端模块边界
+
+- `/api/chat`、`/api/chat/stream` 和 `/api/agent` 均使用 Harness。旧的 `HARNESS_V1_ENABLED` 开关和旧 Agent 已移除；曾设置为 `false` 的部署升级后也会使用 Harness，请从环境配置中删除该项。
+- `backend/lakehouse` 负责湖仓表和读写；`backend/job_store` 负责采集任务、租约、配额和采集运行状态。`backend/repositories` 面向业务查询。
+- `backend/providers` 负责上游接口访问与响应解析；`backend/ingestion` 负责采集编排、去重和入库。包含采集编排的新闻采集器仍放在 `ingestion`。
+- `backend/rag/common`、`news` 和 `annual_reports` 分别存放公共、新闻和年报检索能力。
+- 新闻采集、清洗和索引入口分别为 `python -m backend.ingestion.jobs.ingest_news`、`python -m backend.pipelines.news_bronze_to_silver` 和 `python -m backend.pipelines.news_rag_index`。
+- 年报通过 Ray 执行解析；`backend/pdf_parser` 包含 Ray 使用的解析服务类，`pdf-parser/requirements.txt` 保存解析节点依赖。
+
+升级前应完成旧接口调用迁移：年报解析改用 `/internal/jobs/annual-reports-ray` 系列接口，新闻任务改用上述 `backend` 模块；旧新闻 `limit` 参数已移除。停止或完成使用固定预算的 Agent 任务后再升级，所有新任务使用动态预算。实时窗口迁移的盘点和重算步骤见 `docs/realtime-quotes.md`。

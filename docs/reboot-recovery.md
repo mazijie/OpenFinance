@@ -15,7 +15,7 @@ sudo docker compose ps -a
 sudo docker compose logs --tail=100 postgres minio opensearch kafka
 ```
 
-CPU 临时方案（需要 Compose v2.24+，不要启用仍需 GPU 的 legacy-parser profile）：
+CPU 临时方案（需要 Compose v2.24+）：
 
 ```bash
 sudo bash scripts/compose.sh config --quiet

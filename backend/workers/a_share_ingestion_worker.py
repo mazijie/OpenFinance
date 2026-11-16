@@ -7,8 +7,8 @@ from threading import Event, Thread
 from datetime import datetime
 
 from backend.ingestion.jobs.ingest_a_share_daily_bars import ingest_a_share_daily_bars
-from backend.lakehouse.a_share_ingestion_jobs import AShareIngestionJobStore
-from backend.lakehouse.job_lease import JobLeaseLost
+from backend.job_store.a_share_ingestion_jobs import AShareIngestionJobStore
+from backend.job_store.job_lease import JobLeaseLost
 from backend.logging_utils import configure_logging, get_logger
 
 logger = get_logger(__name__)

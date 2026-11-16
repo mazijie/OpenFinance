@@ -2,8 +2,8 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from backend.rag.annual_report_indexer import AnnualReportRAGIndexer
-from backend.rag.annual_report_store import AnnualReportVectorStore
+from backend.rag.annual_reports.annual_report_indexer import AnnualReportRAGIndexer
+from backend.rag.annual_reports.annual_report_store import AnnualReportVectorStore
 from backend.schemas.annual_report import AnnualReportChunkRecord
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
@@ -276,3 +276,34 @@ def test_versioned_index_writes_completed_embedding_batches_before_later_failure
     result = indexer.run()
     assert len(vector.rows) == 2
     assert result["skipped_existing"] == 1
+
+
+def test_vector_store_preserves_distinct_chunks_with_same_content_hash(monkeypatch):
+    from backend.rag.annual_reports import annual_report_store
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def execute(self, sql, values):
+            assert "ON CONFLICT (generation_id, chunk_id)" in sql
+            inserted.append(dict(values))
+
+    @contextmanager
+    def connect():
+        yield SimpleNamespace(cursor=lambda: Cursor())
+
+    inserted = []
+    monkeypatch.setattr(annual_report_store, "Vector", lambda embedding: embedding)
+    store = object.__new__(AnnualReportVectorStore)
+    store.schema, store.table, store._connection = "openfinance", "annual_report_chunks", connect
+    chunks = [
+        {"chunk_id": "first", "report_id": "report", "content_hash": "same", "embedding": [1.0]},
+        {"chunk_id": "second", "report_id": "report", "content_hash": "same", "embedding": [1.0]},
+    ]
+    assert store.upsert(chunks, generation_id="generation") == 2
+    assert [row["chunk_id"] for row in inserted] == ["first", "second"]
+    assert {row["content_hash"] for row in inserted} == {"same"}

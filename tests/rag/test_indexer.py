@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from backend.rag.indexer import NewsRAGIndexer
+from backend.rag.news.indexer import NewsRAGIndexer
 from backend.schemas.news import NewsArticleRecord
 import pytest
 

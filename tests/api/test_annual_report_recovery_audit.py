@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from backend.api.internal_jobs import _annual_report_ir_is_valid, _annual_report_silver_is_valid
-from backend.rag.annual_report_chunking import build_ir_chunks
+from backend.api.internal_report_jobs import _annual_report_ir_is_valid, _annual_report_silver_is_valid
+from backend.rag.annual_reports.annual_report_chunking import build_ir_chunks
 
 
 def _ir():

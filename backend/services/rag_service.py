@@ -6,12 +6,12 @@ from datetime import date, datetime
 
 from backend.config import settings
 from backend.repositories.rag_repository import RagRepository
-from backend.rag.retrieval import aggregate_articles, filter_by_threshold, mmr_select
+from backend.rag.common.retrieval import aggregate_articles, filter_by_threshold, mmr_select
 from backend.schemas.rag import RagSearchResult
-from backend.rag.embeddings import RagEmbeddingError
-from backend.rag.lexical_store import LexicalStoreError
-from backend.rag.reranker import RerankerError
-from backend.rag.vector_store import RagStoreError
+from backend.rag.common.embeddings import RagEmbeddingError
+from backend.rag.news.lexical_store import LexicalStoreError
+from backend.rag.common.reranker import RerankerError
+from backend.rag.news.vector_store import RagStoreError
 
 
 class RagService:

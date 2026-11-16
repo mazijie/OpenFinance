@@ -4,6 +4,6 @@ MinerU 4.0.12 `basic` was tested locally with CPU ONNX models against pages 3 an
 
 The adapter accepts only MinerU 4.0.12 `docvortex.middle` 2.0, converts normalized boxes to PDF coordinates, retains table HTML, and does not invent OCR confidence or cell coordinates. It uses rendered page images and OCR, including region clips for mixed pages. MinerU is the default for the Ray pipeline.
 
-The default settings are `PDF_LAYOUT_ENGINE=mineru`, `PDF_MINERU_TIER=basic`, and `PDF_PARSER_VERSION=annual-report-mineru-basic-4.0.12-v1`. Install `mineru==4.0.12` on the Ray execution node; the backend passes these settings to Ray jobs. Explicit environment settings override the defaults. Tier or model changes require a new parser version to avoid reusing incompatible checkpoints. The optional legacy Compose parser remains a separate Paddle service.
+The default settings are `PDF_LAYOUT_ENGINE=mineru`, `PDF_MINERU_TIER=basic`, and `PDF_PARSER_VERSION=annual-report-mineru-basic-4.0.12-v1`. Install `mineru==4.0.12` on the Ray execution node; the backend passes these settings to Ray jobs. Explicit environment settings override the defaults. Tier or model changes require a new parser version to avoid reusing incompatible checkpoints. The Ray pipeline supports both MinerU and Paddle parsing engines.
 
 MinerU basic ONNX execution observed here used CPU; a Ray GPU reservation does not imply GPU inference. A 143-page 2024 annual report was parsed, written to Silver, indexed, and retrieved successfully. This end-to-end check is not a full accuracy benchmark.

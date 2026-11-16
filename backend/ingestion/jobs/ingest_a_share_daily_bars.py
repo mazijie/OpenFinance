@@ -18,7 +18,7 @@ from backend.logging_utils import configure_logging, get_logger
 from backend.providers.finance import BaseFinanceProvider, BaoStockFinanceProvider, FinanceProviderError
 from backend.providers.daily_bars import TencentDailyBarsProvider, create_daily_provider
 from backend.providers.tencent_securities import TencentSecurityProvider
-from backend.lakehouse.job_lease import JobLeaseLost
+from backend.job_store.job_lease import JobLeaseLost
 
 logger = get_logger(__name__)
 

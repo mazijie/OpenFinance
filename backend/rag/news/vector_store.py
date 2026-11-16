@@ -23,7 +23,7 @@ from backend.config import settings
 from backend.logging_utils import get_logger
 from backend.schemas.rag import RagChunkRecord, RagSearchHit
 from backend.utils.time import day_end_utc, day_start_utc
-from backend.rag.vector_schema import ensure_vector_dimension
+from backend.rag.common.vector_schema import ensure_vector_dimension
 
 logger = get_logger(__name__)
 

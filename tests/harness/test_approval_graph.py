@@ -173,7 +173,6 @@ def test_write_tool_pauses_and_resumes_after_approval(monkeypatch):
         as_of=datetime(2026, 10, 26, tzinfo=UTC),
         tools=FakeTools(),
         llm_factory=lambda: llm,
-        dynamic_budget_enabled=True,
         task_analyzer=analyzer,
     ).graph
     config = {"configurable": {"thread_id": "00000000-0000-0000-0000-000000000001"}}

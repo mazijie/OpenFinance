@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from backend.rag.vector_schema import ensure_vector_dimension
+from backend.rag.common.vector_schema import ensure_vector_dimension
 
 
 class FakeCursor:

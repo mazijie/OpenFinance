@@ -5,7 +5,7 @@ import pytest
 
 from backend.pipelines.finance_bronze_to_silver import FinanceBronzeToSilverPipeline
 from backend.schemas.finance import DailyBarRecord, SecurityMasterRecord, TradingCalendarRecord
-from backend.lakehouse.job_lease import JobLeaseLost
+from backend.job_store.job_lease import JobLeaseLost
 
 
 class FakeBronzeWriter:

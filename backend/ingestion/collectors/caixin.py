@@ -34,8 +34,7 @@ class CaixinCollector:
     def __init__(self, client: httpx.AsyncClient | None = None) -> None:
         self._client = client
 
-    async def collect_news(self, *, existing_external_ids: set[str] | None = None,
-                           limit: int | None = None) -> ProviderNewsResponse:
+    async def collect_news(self, *, existing_external_ids: set[str] | None = None) -> ProviderNewsResponse:
         if self._client is None:
             async with httpx.AsyncClient(timeout=settings.NEWS_HTTP_TIMEOUT_SECONDS) as client:
                 payload = await self._request(client)
@@ -47,7 +46,6 @@ class CaixinCollector:
         seen: set[str] = set()
         articles: list[ProviderNewsArticle] = []
         invalid = duplicates = 0
-        # ``limit`` remains accepted for callers of the previous interface.
         for row in rows:
             try:
                 if not isinstance(row, dict):

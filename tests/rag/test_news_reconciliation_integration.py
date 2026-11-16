@@ -3,8 +3,8 @@ import os
 import pytest
 from datetime import datetime, timezone
 from uuid import uuid4
-from backend.rag.indexer import NewsRAGIndexer
-from backend.rag.vector_store import PgVectorNewsStore, RagStoreError
+from backend.rag.news.indexer import NewsRAGIndexer
+from backend.rag.news.vector_store import PgVectorNewsStore, RagStoreError
 from backend.schemas.news import NewsArticleRecord
 
 

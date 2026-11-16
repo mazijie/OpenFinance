@@ -27,7 +27,6 @@ class IngestNewsResult:
     article_count: int
     start_time: datetime | None
     end_time: datetime | None
-    limit: int | None
 
     def to_dict(self) -> dict[str, object]:
         """Serialize result for logging or Airflow XCom."""
@@ -44,7 +43,6 @@ async def ingest_finance_news(
     *,
     start_time: datetime | None = None,
     end_time: datetime | None = None,
-    limit: int | None = None,
 ) -> IngestNewsResult:
     """Collect Caixin summaries and persist the feed response to Bronze."""
 
@@ -74,7 +72,6 @@ async def ingest_finance_news(
         article_count=len(response.articles),
         start_time=resolved_start,
         end_time=resolved_end,
-        limit=None,
     )
     logger.info(
         "财经新闻采集任务完成" if object_path else "没有新的有效新闻摘要，未写入 Bronze",
@@ -88,7 +85,6 @@ async def ingest_news_batch(
     *,
     start_time: datetime | None = None,
     end_time: datetime | None = None,
-    limit: int | None = None,
 ) -> list[IngestNewsResult]:
     """Run one finance-news ingestion batch."""
 
@@ -96,7 +92,6 @@ async def ingest_news_batch(
         await ingest_finance_news(
             start_time=start_time,
             end_time=end_time,
-            limit=limit,
         )
     ]
 
@@ -116,7 +111,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Ingest Caixin news summaries into Bronze")
     parser.add_argument("--start-time", help="Start time in ISO-8601 format")
     parser.add_argument("--end-time", help="End time in ISO-8601 format")
-    parser.add_argument("--limit", type=int, help="Deprecated; accepted for compatibility and ignored")
     parser.add_argument(
         "--use-default-window",
         action="store_true",
@@ -141,7 +135,6 @@ def main() -> None:
         ingest_news_batch(
             start_time=start_time,
             end_time=end_time,
-            limit=args.limit,
         )
     )
     print(json.dumps([result.to_dict() for result in results], ensure_ascii=False, indent=2))

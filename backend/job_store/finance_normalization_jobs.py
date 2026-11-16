@@ -7,7 +7,7 @@ from typing import Any, Iterator
 from uuid import UUID, uuid4
 import psycopg
 from backend.config import settings
-from backend.lakehouse.job_lease import JobLeaseLost
+from backend.job_store.job_lease import JobLeaseLost
 
 class FinanceNormalizationJobStore:
     _schema = "openfinance"
