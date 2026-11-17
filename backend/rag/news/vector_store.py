@@ -92,6 +92,25 @@ class PgVectorNewsStore:
                     row["embedding"] = row["embedding"].tolist()
             return [RagChunkRecord.model_validate(row) for row in rows]
 
+    def chunk_ids_for_content_hashes(self, content_hashes: Iterable[str]) -> set[str]:
+        wanted = [value for value in content_hashes if value]
+        if not wanted:
+            return set()
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(f"SELECT chunk_id FROM {self.fqtn} WHERE content_hash = ANY(%s)", (wanted,))
+            return {str(row[0]) for row in cur.fetchall()}
+
+    def chunks_for_ids(self, chunk_ids: list[str]) -> list[RagChunkRecord]:
+        if not chunk_ids:
+            return []
+        with self._connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(f"SELECT chunk_id, news_id, external_news_id, provider, source_name, title, summary, content, url, published_at, ingested_at, language, symbols, entities, content_hash, raw_object_path, chunk_index, chunk_text, embedding FROM {self.fqtn} WHERE chunk_id = ANY(%s)", (chunk_ids,))
+            rows = cur.fetchall()
+            for row in rows:
+                value = row["embedding"]
+                row["embedding"] = value.to_list() if hasattr(value, "to_list") else value.tolist() if hasattr(value, "tolist") else value
+            return [RagChunkRecord.model_validate(row) for row in rows]
+
     def clear(self) -> None:
         with self._connection() as conn, conn.cursor() as cur: cur.execute(f"TRUNCATE TABLE {self.fqtn}")
 
@@ -228,7 +247,12 @@ class PgVectorNewsStore:
 
         with self._connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql, tuple(params))
-            return [RagSearchHit.model_validate(row) for row in cur.fetchall()]
+            rows = cur.fetchall()
+            for row in rows:
+                value = row.get("embedding")
+                if value is not None:
+                    row["embedding"] = value.to_list() if hasattr(value, "to_list") else value.tolist() if hasattr(value, "tolist") else value
+            return [RagSearchHit.model_validate(row) for row in rows]
 
     @property
     def fqtn(self) -> str:

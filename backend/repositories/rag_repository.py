@@ -56,6 +56,12 @@ class RagRepository:
         lexical_hits: list[RagSearchHit] = []
         succeeded = 0
         try:
+            if isinstance(self.vector_store, PgVectorNewsStore):
+                with self.vector_store._connection() as conn, conn.cursor() as cur:
+                    cur.execute("SELECT status, embedding_model FROM openfinance.news_index_reconciliation WHERE id=1")
+                    state = cur.fetchone()
+                if not state or state[0] != "success" or state[1] != self.embedding_service.model_name:
+                    raise RagStoreError("News vector index is rebuilding or uses a different model")
             query_embedding = self.embedding_service.embed_query(question)
             vector_hits = self.vector_store.search_chunks(
                 query_embedding=query_embedding, symbol=symbol, start_date=start_date,

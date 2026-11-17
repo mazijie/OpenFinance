@@ -46,37 +46,20 @@ class AnnualReportRagService:
         candidate_limit = max(limit * 5, settings.RAG_CANDIDATE_LIMIT)
         active = self.state_store.get_active_generation() if self.state_store is not None else None
         generation_id = str(active["generation_id"]) if active else None
-        if self.state_store is not None and generation_id is None:
-            return []
-        query_embeddings = self.embeddings
-        temporary_embeddings = None
-        if active and (
-            str(active["embedding_model"]) != self.embeddings.model_name
-            or int(active["embedding_dimension"]) != self.embeddings.dimension
-        ):
-            temporary_embeddings = EmbeddingService(
-                model_name=str(active["embedding_model"]),
-                dimension=int(active["embedding_dimension"]),
-            )
-            query_embeddings = temporary_embeddings
-        try:
-            query_vector = query_embeddings.embed_query(question)
-        finally:
-            if temporary_embeddings is not None:
-                temporary_embeddings.close()
-        vector_hits = self.store.search(
-            embedding=query_vector,
-            stock_code=stock_code,
-            report_year=report_year,
-            section_path=section_path,
-            content_types=content_types,
-            page_start=page_start,
-            page_end=page_end,
-            as_of=as_of,
-            published_after=published_after,
-            limit=candidate_limit,
-            generation_id=generation_id,
-        )
+        vector_hits = []
+        # Never compare Qwen queries with a generation produced by another model.
+        if self.state_store is None or (active and str(active["embedding_model"]) == self.embeddings.model_name and int(active["embedding_dimension"]) == self.embeddings.dimension):
+            try:
+                query_vector = self.embeddings.embed_query(question)
+                vector_hits = self.store.search(
+                    embedding=query_vector, stock_code=stock_code, report_year=report_year,
+                    section_path=section_path, content_types=content_types, page_start=page_start,
+                    page_end=page_end, as_of=as_of, published_after=published_after,
+                    limit=candidate_limit, generation_id=generation_id,
+                )
+            except Exception:
+                if not self.lexical.enabled:
+                    raise
         lexical_hits: list = []
         try:
             lexical_hits = self.lexical.search(

@@ -66,6 +66,7 @@ class NewsRAGIndexer:
         """Index all eligible Silver records into pgvector."""
         with self._index_lock():
             self._reconciliation_details = {}
+            self._prepare_model()
             self._record_status("running")
             try:
                 result = self._run(records, rebuild_all=rebuild_all)
@@ -77,6 +78,22 @@ class NewsRAGIndexer:
             except Exception as exc:
                 self._record_status("failed", self._reconciliation_details, error=f"{type(exc).__name__}: {exc}"[:1000])
                 raise
+
+    def _prepare_model(self) -> None:
+        """Reset incompatible vectors once, under the exclusive index lock."""
+        if not isinstance(self.vector_store, PgVectorNewsStore):
+            return
+        model = self.embedding_service.model_name
+        with self.vector_store._connection() as conn, conn.transaction(), conn.cursor() as cur:
+            cur.execute("SELECT embedding_model FROM openfinance.news_index_reconciliation WHERE id=1 FOR UPDATE")
+            row = cur.fetchone()
+            if row is None or row[0] != model:
+                cur.execute(f"TRUNCATE TABLE {self.vector_store.fqtn}")
+                cur.execute("""INSERT INTO openfinance.news_index_reconciliation
+                    (id, status, updated_at, details, embedding_model)
+                    VALUES (1, 'running', now(), '{}'::jsonb, %s)
+                    ON CONFLICT (id) DO UPDATE SET status='running', updated_at=now(),
+                    details='{}'::jsonb, error=NULL, embedding_model=EXCLUDED.embedding_model""", (model,))
 
     def _record_status(self, status: str, details: dict | None = None, error: str | None = None) -> None:
         if not isinstance(self.vector_store, PgVectorNewsStore):
@@ -116,8 +133,12 @@ class NewsRAGIndexer:
             return stats.to_model()
 
         content_hashes = [record.content_hash for record in eligible_records]
-        existing_chunks = self.vector_store.chunks_for_content_hashes(content_hashes)
-        existing_by_id = {chunk.chunk_id: chunk for chunk in existing_chunks}
+        def existing_ids():
+            if isinstance(self.vector_store, PgVectorNewsStore):
+                return self.vector_store.chunk_ids_for_content_hashes(content_hashes)
+            return {chunk.chunk_id for chunk in self.vector_store.chunks_for_content_hashes(content_hashes)}
+
+        previous_ids = existing_ids()
         expected: dict[str, tuple[NewsArticleRecord, int, str]] = {}
         for record in eligible_records:
             source_text = build_source_text(record)
@@ -131,35 +152,47 @@ class NewsRAGIndexer:
             for chunk_index, chunk_text in enumerate(chunks):
                 chunk_hash = sha256_text("|".join([record.content_hash, str(chunk_index), chunk_text.casefold()]))
                 expected[str(uuid5(NAMESPACE_URL, chunk_hash))] = (record, chunk_index, chunk_text)
-        missing_vectors = [value for key, value in expected.items() if rebuild_all or key not in existing_by_id]
+        missing_vectors = [value for key, value in expected.items() if rebuild_all or key not in previous_ids]
         self._reconciliation_details.update(expected_chunks=len(expected), missing_vector_chunks=len(missing_vectors), repaired_vector_chunks=0)
         stats.chunk_count = len(expected)
         stats.skipped_existing = max(0, len(expected) - len(missing_vectors))
 
-        try: embeddings = self.embedding_service.embed_documents([chunk_text for _, _, chunk_text in missing_vectors]) if missing_vectors else []
-        except RagEmbeddingError:
-            stats.embeddings_failed = len(missing_vectors); return stats.to_model()
-
-        if len(embeddings) != len(missing_vectors):
-            stats.errors += 1
-            return stats.to_model()
-
-        chunk_records = [
-            self._build_chunk_record(record=record, chunk_index=chunk_index, chunk_text=chunk_text, embedding=embedding)
-            for (record, chunk_index, chunk_text), embedding in zip(missing_vectors, embeddings, strict=True)
-        ]
-        if chunk_records: self.vector_store.upsert_chunks(chunk_records)
-        verified = {chunk.chunk_id: chunk for chunk in self.vector_store.chunks_for_content_hashes(content_hashes)}
-        self._reconciliation_details["repaired_vector_chunks"] = len(set(verified) - set(existing_by_id))
-        if set(expected) - set(verified):
+        written_count = 0
+        batch_size = max(1, settings.EMBEDDING_BATCH_SIZE)
+        for start in range(0, len(missing_vectors), batch_size):
+            batch = missing_vectors[start:start + batch_size]
+            try:
+                embeddings = self.embedding_service.embed_documents([text for _, _, text in batch])
+            except RagEmbeddingError:
+                stats.embeddings_failed = len(missing_vectors) - start
+                return stats.to_model()
+            if len(embeddings) != len(batch):
+                stats.errors += 1
+                return stats.to_model()
+            chunk_records = [
+                self._build_chunk_record(record=record, chunk_index=index, chunk_text=text, embedding=embedding)
+                for (record, index, text), embedding in zip(batch, embeddings, strict=True)
+            ]
+            written_count += self.vector_store.upsert_chunks(chunk_records)
+        verified_ids = existing_ids()
+        self._reconciliation_details["repaired_vector_chunks"] = len(verified_ids - previous_ids)
+        if set(expected) - verified_ids:
             raise RagStoreError("News vector index is incomplete after reconciliation")
-        existing_by_id = verified
+        missing_ids = set()
         if self.lexical_store.enabled:
             lexical_ids = self.lexical_store.existing_chunk_ids(list(expected))
             missing_ids = set(expected) - lexical_ids
             self._reconciliation_details.update(missing_lexical_chunks=len(missing_ids), repaired_lexical_chunks=0)
             try:
-                self.lexical_store.upsert_chunks([existing_by_id[chunk_id] for chunk_id in missing_ids])
+                ordered_missing = sorted(missing_ids)
+                for start in range(0, len(ordered_missing), 500):
+                    ids = ordered_missing[start:start + 500]
+                    if isinstance(self.vector_store, PgVectorNewsStore):
+                        chunks = self.vector_store.chunks_for_ids(ids)
+                    else:
+                        wanted = set(ids)
+                        chunks = [chunk for chunk in self.vector_store.chunks_for_content_hashes(content_hashes) if chunk.chunk_id in wanted]
+                    self.lexical_store.upsert_chunks(chunks)
             except Exception:
                 try:
                     remaining = self.lexical_store.existing_chunk_ids(list(missing_ids))
@@ -170,10 +203,10 @@ class NewsRAGIndexer:
             if set(expected) - self.lexical_store.existing_chunk_ids(list(expected)):
                 raise RagStoreError("News lexical index is incomplete after reconciliation")
             self._reconciliation_details["repaired_lexical_chunks"] = len(missing_ids)
-        stats.written_chunks = len(chunk_records)
+        stats.written_chunks = written_count
         result = stats.to_model()
         result.details = {"missing_vector_chunks": len(missing_vectors),
-                          "repaired_vector_chunks": len(chunk_records),
+                          "repaired_vector_chunks": written_count,
                           "missing_lexical_chunks": len(missing_ids) if self.lexical_store.enabled else None,
                           "repaired_lexical_chunks": len(missing_ids) if self.lexical_store.enabled else None}
         logger.info("RAG indexing completed", extra=stats.to_model().model_dump())
@@ -181,6 +214,9 @@ class NewsRAGIndexer:
 
     def close(self) -> None:
         self.lexical_store.close()
+        close = getattr(self.embedding_service, "close", None)
+        if callable(close):
+            close()
 
     def _build_chunk_record(
         self,

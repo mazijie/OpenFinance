@@ -13,8 +13,9 @@ class FakeResponse:
 
     def json(self):
         return {
+            "model": "Qwen3-Embedding-4B-1024-v1",
             "data": [
-                {"index": index, "embedding": [0.25] * 1024}
+                {"index": index, "embedding": [1 / 32] * 1024}
                 for index in range(self._count)
             ]
         }
@@ -33,10 +34,10 @@ class FakeClient:
         self.closed = True
 
 
-def test_local_openai_embedding_is_batched_without_api_key(monkeypatch):
+def test_remote_documents_are_batched(monkeypatch):
     monkeypatch.setattr(settings, "EMBEDDING_API_KEY", "")
-    monkeypatch.setattr(settings, "EMBEDDING_BASE_URL", "http://embedding:11434/v1")
-    monkeypatch.setattr(settings, "EMBEDDING_MODEL", "bge-m3")
+    monkeypatch.setattr(settings, "EMBEDDING_BASE_URL", "http://ray:8002/v1")
+    monkeypatch.setattr(settings, "EMBEDDING_MODEL", "Qwen3-Embedding-4B-1024-v1")
     monkeypatch.setattr(settings, "EMBEDDING_PATH", "/embeddings")
     monkeypatch.setattr(settings, "EMBEDDING_DIMENSION", 1024)
     monkeypatch.setattr(settings, "EMBEDDING_BATCH_SIZE", 2)
@@ -52,15 +53,16 @@ def test_local_openai_embedding_is_batched_without_api_key(monkeypatch):
         ["新闻一", "新闻二"],
         ["新闻三"],
     ]
-    assert all(call[0] == "http://embedding:11434/v1/embeddings" for call in client.calls)
+    assert all(call[0] == "http://ray:8002/v1/embeddings" for call in client.calls)
     assert all("Authorization" not in call[1]["headers"] for call in client.calls)
-    assert all(call[1]["json"]["model"] == "bge-m3" for call in client.calls)
+    assert all(call[1]["json"]["model"] == "Qwen3-Embedding-4B-1024-v1" for call in client.calls)
+    assert all(call[1]["json"]["input_type"] == "document" for call in client.calls)
 
 
 def test_remote_embedding_uses_optional_bearer_token(monkeypatch):
     monkeypatch.setattr(settings, "EMBEDDING_API_KEY", "local-secret")
     monkeypatch.setattr(settings, "EMBEDDING_BASE_URL", "https://embedding.example/v1")
-    monkeypatch.setattr(settings, "EMBEDDING_MODEL", "bge-m3")
+    monkeypatch.setattr(settings, "EMBEDDING_MODEL", "Qwen3-Embedding-4B-1024-v1")
     monkeypatch.setattr(settings, "EMBEDDING_PATH", "/embeddings")
     monkeypatch.setattr(settings, "EMBEDDING_DIMENSION", 1024)
     monkeypatch.setattr(settings, "EMBEDDING_BATCH_SIZE", 16)
@@ -71,3 +73,4 @@ def test_remote_embedding_uses_optional_bearer_token(monkeypatch):
     service.embed_query("查询")
 
     assert client.calls[0][1]["headers"]["Authorization"] == "Bearer local-secret"
+    assert client.calls[0][1]["json"]["input_type"] == "query"

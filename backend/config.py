@@ -30,11 +30,12 @@ class Settings(BaseSettings):
     LLM_MAX_RETRIES: int = 1
 
     EMBEDDING_API_KEY: str = ""
-    EMBEDDING_BASE_URL: str | None = "http://localhost:8001/v1"
-    EMBEDDING_MODEL: str = "bge-m3"
+    EMBEDDING_BASE_URL: str | None = "http://127.0.0.1:8002/v1"
+    EMBEDDING_MODEL: str = "Qwen3-Embedding-4B-1024-v1"
     EMBEDDING_PATH: str = "/embeddings"
     EMBEDDING_DIMENSION: int = 1024
     EMBEDDING_BATCH_SIZE: int = 16
+    EMBEDDING_INDEX_CONCURRENCY: int = 2
     EMBEDDING_TIMEOUT_SECONDS: float = 120.0
 
     MINIO_ENDPOINT: str = "localhost:9000"
@@ -155,7 +156,7 @@ class Settings(BaseSettings):
     RAG_VECTOR_TABLE: str = "news_chunks"
     RAG_ANNUAL_REPORT_VECTOR_TABLE: str = "annual_report_chunks"
     ANNUAL_REPORT_INDEX_READER: Literal["pyiceberg", "starrocks"] = "starrocks"
-    RAG_EMBEDDING_MODEL: str = "bge-m3"
+    RAG_EMBEDDING_MODEL: str = "Qwen3-Embedding-4B-1024-v1"
     RAG_EMBEDDING_PATH: str = "/embeddings"
     RAG_EMBEDDING_DIMENSION: int = 1024
     RAG_CHUNK_SIZE: int = 800

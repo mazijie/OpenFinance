@@ -1,8 +1,9 @@
-"""Embedding service used by the news RAG pipeline."""
+"""Client for the remote Ray Qwen embedding service."""
 
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Iterable
 from typing import Any
 
@@ -18,7 +19,7 @@ class RagEmbeddingError(Exception):
 
 
 class EmbeddingService:
-    """OpenAI-compatible embedding client for local or hosted providers."""
+    """Client shared by indexing and retrieval."""
 
     def __init__(self, *, model_name: str | None = None, dimension: int | None = None) -> None:
         api_key = settings.resolved_embedding_api_key
@@ -29,9 +30,11 @@ class EmbeddingService:
         self._api_key = api_key
         self._url = f"{base_url}{settings.resolved_embedding_path}"
         self._timeout = httpx.Timeout(settings.EMBEDDING_TIMEOUT_SECONDS)
-        self._client = httpx.Client(timeout=self._timeout)
+        self._client = httpx.Client(timeout=self._timeout, trust_env=False)
         self._model_name = model_name or settings.resolved_embedding_model
         self._dimension = dimension or settings.resolved_embedding_dimension
+        if self._model_name != settings.resolved_embedding_model or self._dimension != settings.resolved_embedding_dimension:
+            raise RagEmbeddingError("Requested embedding model does not match the configured Ray model")
 
     def close(self) -> None:
         self._client.close()
@@ -45,9 +48,14 @@ class EmbeddingService:
         return self._dimension
 
     def embed_documents(self, texts: Iterable[str]) -> list[list[float]]:
-        """Embed a batch of documents."""
+        return self._embed(texts, "document")
 
-        payload = [text.strip() for text in texts if text and text.strip()]
+    def _embed(self, texts: Iterable[str], input_type: str) -> list[list[float]]:
+
+        payload = list(texts)
+        if any(not isinstance(text, str) or not text.strip() for text in payload):
+            raise RagEmbeddingError("Embedding inputs must be nonempty strings")
+        payload = [text.strip() for text in payload]
         if not payload:
             return []
 
@@ -59,8 +67,12 @@ class EmbeddingService:
                 {
                     "model": self.model_name,
                     "input": batch,
+                    "input_type": input_type,
                 }
             )
+            entries = response.get("data")
+            if not isinstance(entries, list) or any(not isinstance(item, dict) or type(item.get("index")) is not int for item in entries) or sorted(item["index"] for item in entries) != list(range(len(batch))):
+                raise RagEmbeddingError("Embedding response indexes do not match inputs")
             batch_embeddings = self._extract_embeddings(response)
             if len(batch_embeddings) != len(batch):
                 raise RagEmbeddingError(
@@ -72,7 +84,7 @@ class EmbeddingService:
     def embed_query(self, text: str) -> list[float]:
         """Embed a query string."""
 
-        embeddings = self.embed_documents([text])
+        embeddings = self._embed([text], "query")
         if not embeddings:
             raise RagEmbeddingError("Empty embedding response for query")
         return embeddings[0]
@@ -89,6 +101,8 @@ class EmbeddingService:
             )
             response.raise_for_status()
             data = response.json()
+            if isinstance(data, dict) and data.get("model") != self.model_name:
+                raise RagEmbeddingError("Embedding service returned a different model")
             if not isinstance(data, dict):
                 raise RagEmbeddingError("Embedding provider returned an unexpected payload")
             if data.get("error") or data.get("error_code") not in (None, 0, "0"):
@@ -117,7 +131,12 @@ class EmbeddingService:
             if not isinstance(vector, list):
                 raise RagEmbeddingError("Embedding response missing embedding vector")
             normalized = [float(value) for value in vector]
+            if not all(math.isfinite(value) for value in normalized):
+                raise RagEmbeddingError("Embedding contains a non-finite value")
             if len(normalized) != self.dimension:
                 raise RagEmbeddingError(f"Embedding dimension {len(normalized)} does not match configured {self.dimension}")
+            norm = math.sqrt(sum(value * value for value in normalized))
+            if not 0.98 <= norm <= 1.02:
+                raise RagEmbeddingError("Embedding is not normalized")
             embeddings.append(normalized)
         return embeddings

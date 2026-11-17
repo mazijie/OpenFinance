@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 
 from backend.config import settings
@@ -241,14 +242,23 @@ class AnnualReportRAGIndexer:
             pending = [item for item in chunks if item["chunk_id"] not in existing_ids]
             batch_size = max(1, settings.EMBEDDING_BATCH_SIZE)
             written = 0
-            for start in range(0, len(pending), batch_size):
-                batch = pending[start:start + batch_size]
-                vectors = self.embedding_service.embed_documents([item["chunk_text"] for item in batch])
-                for item, embedding in zip(batch, vectors, strict=True):
-                    item["embedding"] = embedding
-                    item["generation_id"] = generation_id
-                written += self.store.upsert(batch, generation_id=generation_id)
-            lexical_written = self.lexical_store.upsert(chunks, generation_id=generation_id)
+            concurrency = max(1, min(2, settings.EMBEDDING_INDEX_CONCURRENCY))
+            # Bound in-flight work so vectors are persisted batch by batch and
+            # a failed run can resume from the committed chunk IDs.
+            with ThreadPoolExecutor(max_workers=concurrency) as executor:
+                for start in range(0, len(pending), batch_size * concurrency):
+                    groups = [pending[offset:offset + batch_size]
+                              for offset in range(start, min(start + batch_size * concurrency, len(pending)), batch_size)]
+                    futures = [executor.submit(self.embedding_service.embed_documents, [item["chunk_text"] for item in group]) for group in groups]
+                    for batch, future in zip(groups, futures, strict=True):
+                        vectors = future.result()
+                        for item, embedding in zip(batch, vectors, strict=True):
+                            item["embedding"] = embedding
+                            item["generation_id"] = generation_id
+                        written += self.store.upsert(batch, generation_id=generation_id)
+            lexical_written = 0
+            for start in range(0, len(chunks), 500):
+                lexical_written += self.lexical_store.upsert(chunks[start:start + 500], generation_id=generation_id)
             vector_count = self.store.count_generation(generation_id)
             lexical_count = len(chunks) if not self.lexical_store.enabled else self.lexical_store.count_generation(generation_id)
             if vector_count != len(chunks) or lexical_count != len(chunks):
