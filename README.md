@@ -10,6 +10,14 @@ OpenFinance is an open-source research platform for China’s financial markets.
 - **Data processing:** Stores raw data in MinIO Bronze, curated tables in Iceberg Silver, and calculated daily indicators in Gold. Airflow schedules ingestion and processing; Spark builds and maintains analytical tables.
 - **Live quotes:** A Kafka and Flink pipeline collects market snapshots; its windows are sampled statistics, not tick-by-tick trades.
 
+## Architecture
+
+- `/api/chat`, `/api/chat/stream`, and `/api/agent` use the Harness.
+- `backend/lakehouse` manages lakehouse tables and reads and writes; `backend/job_store` manages ingestion jobs, leases, quotas, and run state. `backend/repositories` provides business queries.
+- `backend/providers` handles upstream requests and response parsing; `backend/ingestion` handles ingestion orchestration, deduplication, and persistence, including news collectors that orchestrate ingestion.
+- `backend/rag/common`, `backend/rag/news`, and `backend/rag/annual_reports` contain shared, news, and annual-report retrieval code, respectively. News and annual-report embeddings use a Qwen model service on Ray; index generations are validated before activation.
+- Annual reports are parsed with Ray. `backend/pdf_parser` contains the parsing service used by Ray, and `pdf-parser/requirements.txt` lists the parsing node dependencies.
+
 ## Deploy with Docker Compose
 
 ### Requirements
@@ -52,23 +60,18 @@ The Ray workers need the project dependencies, access to PostgreSQL and MinIO, a
 | MinIO Console | <http://localhost:9001> |
 | Flink UI | <http://localhost:8083> |
 
+### Operational limits
+
 The Compose files are intended as a local, single-host reference deployment. They do not provide high availability or production security defaults. Replace sample credentials, restrict network access to development services, and arrange backups for persistent data before using the stack with important datasets. Configure a reachable Ray cluster and its storage endpoints for annual-report parsing at scale; see `.env.example`.
 
-## Development and contributions
+Real-time window recomputation is available through `python -m realtime.recompute` for ranges covered by retained Kafka data.
 
-Issues and pull requests are welcome. For larger changes, open an issue first. When submitting a pull request, describe the user-visible change and include focused tests or documentation updates where appropriate. Install the Python dependencies from `requirements.txt`, then run relevant tests with `pytest -q`.
+## Development
+
+Install the Python dependencies from `requirements.txt`, then run relevant tests with `pytest -q`.
+
+News ingestion, normalization, and indexing start at `python -m backend.ingestion.jobs.ingest_news`, `python -m backend.pipelines.news_bronze_to_silver`, and `python -m backend.pipelines.news_rag_index`, respectively. Annual-report parsing jobs use the `/internal/jobs/annual-reports-ray` endpoints.
+
+## License
 
 This project is licensed under the Apache License 2.0; see `LICENSE`. It provides financial data and research tools and does not constitute investment advice.
-
-### Backend modules
-
-- `/api/chat`, `/api/chat/stream`, and `/api/agent` use the Harness.
-- `backend/lakehouse` manages lakehouse tables and reads and writes; `backend/job_store` manages ingestion jobs, leases, quotas, and run state. `backend/repositories` provides business queries.
-- `backend/providers` handles upstream requests and response parsing; `backend/ingestion` handles ingestion orchestration, deduplication, and persistence, including news collectors that orchestrate ingestion.
-- `backend/rag/common`, `backend/rag/news`, and `backend/rag/annual_reports` contain shared, news, and annual-report retrieval code, respectively.
-- News ingestion, normalization, and indexing start at `python -m backend.ingestion.jobs.ingest_news`, `python -m backend.pipelines.news_bronze_to_silver`, and `python -m backend.pipelines.news_rag_index`, respectively.
-- Annual reports are parsed with Ray. `backend/pdf_parser` contains the parsing service used by Ray, and `pdf-parser/requirements.txt` lists the parsing node dependencies.
-
-Annual-report parsing jobs use the `/internal/jobs/annual-reports-ray` endpoints. Real-time window recomputation is available through `python -m realtime.recompute` for ranges covered by retained Kafka data.
-
-News and annual-report embeddings use a Qwen model service on Ray. The embedding supervisor deploys and monitors the service, and index generations are validated before activation.
