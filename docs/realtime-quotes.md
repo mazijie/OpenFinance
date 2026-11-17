@@ -9,7 +9,7 @@ bash scripts/compose.sh up -d --build
 docker compose logs -f quote-collector quote-consumer flink-submit
 ```
 
-首次启动会运行后端数据库迁移。实时模式通过后端刷新腾讯证券名单并保存到 PostgreSQL；刷新失败时使用最近的非空腾讯缓存并记录缓存日期，没有可用缓存则报告失败。采集以每批最多 500 只并发请求；北京时间交易日交易时段按整分钟启动，不允许重叠。日历未知时不访问上游，批次失败按 2、4、8 秒重试。支持沪深京代码映射，北交所仅对一只证券完成非交易时段单次请求验证。交易日历由后端 `/internal/jobs/trading-day` 提供，需设置与后端一致的 `OPENFINANCE_INTERNAL_API_TOKEN`。页面每 15 秒刷新；后端 `QUOTE_STALE_SECONDS` 默认 300 秒。无法保证第三方接口不会限流；如持续超时或拒绝，应停止采集器。
+首次启动会运行后端数据库迁移。实时模式通过后端刷新腾讯证券名单并保存到 PostgreSQL；刷新失败时使用最近的非空腾讯缓存并记录缓存日期，没有可用缓存则报告失败。采集以每批最多 500 只并发请求；北京时间交易日交易时段按整分钟启动，前一轮未完成时下一轮仍会启动。每轮独立记录采集状态，慢轮次可能晚于后续轮次写入 Kafka。持续阻塞的轮次会累积并增加并发请求数。日历未知时不访问上游，批次失败按 2、4、8 秒重试。支持沪深京代码映射，北交所仅对一只证券完成非交易时段单次请求验证。交易日历由后端 `/internal/jobs/trading-day` 提供，需设置与后端一致的 `OPENFINANCE_INTERNAL_API_TOKEN`。页面每 15 秒刷新；后端 `QUOTE_STALE_SECONDS` 默认 300 秒。无法保证第三方接口不会限流；如持续超时或拒绝，应停止采集器。
 
 修改 Compose 中的 `CALENDAR_URL` 后，需要重新创建采集器容器才能更新环境变量；单纯 `restart` 不会应用新地址。使用与部署时相同的 Compose `-f` 参数执行 `docker compose up -d --no-deps quote-collector`。如果日志出现旧地址 `/internal/jobs/investment-monitor/trading-day` 的 404，说明运行中的容器仍保留旧配置。修复后，采集器在下一个交易时段的整分钟继续采集，不会自动补回漏采的盘中记录。
 

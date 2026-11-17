@@ -6,7 +6,7 @@ import os
 import time
 from datetime import datetime, timezone, timedelta
 from multiprocessing import get_context
-from threading import Thread
+from threading import Lock, Thread
 from realtime.tencent import CHINA, collect_round
 from realtime.indices import collect_indices
 from realtime.quote_metrics import persist_quote_metrics
@@ -106,10 +106,98 @@ def send_watermarks(producer, *, interval=15):
         time.sleep(interval)
 
 
+class IndexCollector:
+    def __init__(self):
+        self.lock = Lock()
+        self.thread = None
+
+    def start(self, minute, fetch=None):
+        with self.lock:
+            if self.thread is not None and self.thread.is_alive():
+                return
+            args = (minute,) if fetch is None else (minute, fetch)
+            self.thread = Thread(target=collect_indices, args=args, daemon=True)
+            self.thread.start()
+
+
+def collect_quote_round(minute, mode, producer, start_indices):
+    import requests
+    started = False
+    acknowledged = 0
+    expected = None
+    failed_batches = None
+    try:
+        if mode == "live":
+            if not ((9, 30) <= (minute.hour, minute.minute) <= (11, 30) or (13, 0) <= (minute.hour, minute.minute) <= (15, 0)):
+                return
+        record_round(os.environ["DATABASE_URL"], minute, "collecting")
+        started = True
+        if mode == "live":
+            calendar = requests.get(os.environ["CALENDAR_URL"], params={"trading_date": minute.date().isoformat()},
+                headers={"X-Openfinance-Token": os.environ["OPENFINANCE_INTERNAL_API_TOKEN"]}, timeout=15)
+            calendar.raise_for_status()
+            if calendar.json().get("is_open") is not True:
+                log.warning("calendar closed or unavailable; no upstream request")
+                record_round(os.environ["DATABASE_URL"], minute, "calendar_not_open_or_unknown")
+                return
+            start_indices(minute)
+            response = requests.get(os.environ["UNIVERSE_URL"], headers={"X-Openfinance-Token": os.environ["OPENFINANCE_INTERNAL_API_TOKEN"]}, timeout=120)
+            response.raise_for_status()
+            universe = response.json()
+            if not universe.get("symbols"):
+                raise RuntimeError("security universe is empty")
+            if universe.get("stale"):
+                log.warning("using stale security universe from %s", universe.get("as_of_date"))
+            items = collect_round(universe["symbols"], minute)
+        else:
+            symbols = [s.strip().upper() for s in os.getenv("QUOTE_SYMBOLS", "600519.SH,000001.SZ").split(",")]
+            def mock_fetch(batch, instant):
+                return ({symbol: {"symbol": symbol, "name": "模拟数据", "price": 10.0+i,
+                    "previous_close": 10.0, "source": "mock", "source_time": instant.astimezone(timezone.utc).isoformat(),
+                    "captured_at": datetime.now(timezone.utc).isoformat(), "status": "valid"}
+                    for i, symbol in enumerate(batch)}, [])
+            start_indices(minute, mock_fetch)
+            items = collect_round(symbols, minute, fetch=mock_fetch)
+        items = list(items)
+        persist_quote_metrics(items)
+        expected = len(items)
+        failed_batches = max((item.get("failed_batches", 0) for item in items), default=0)
+        record_round(os.environ["DATABASE_URL"], minute, "publishing", expected=expected, failed_batches=failed_batches)
+        pending = []
+        for item in items:
+            pending.append(producer.send("quotes.raw", key=item["symbol"].encode(), value=item))
+        for future in pending:
+            future.get(timeout=30)
+            acknowledged += 1
+        status = "incomplete" if failed_batches or any(item.get("status") in ("missing", "unsupported") for item in items) else "published"
+        record_round(os.environ["DATABASE_URL"], minute, status, expected=expected,
+                     failed_batches=failed_batches, acknowledged=acknowledged)
+        if mode == "live":
+            try:
+                record_universe(os.environ["DATABASE_URL"], minute.date(), items)
+            except Exception:
+                log.exception("could not record intraday universe for backfill")
+        log.info("published round %s records=%d", minute.isoformat(), len(pending))
+    except Exception as exc:
+        log.exception("snapshot collection failed; next round will be attempted")
+        if started:
+            try:
+                record_round(os.environ["DATABASE_URL"], minute, "failed", expected=expected,
+                             failed_batches=failed_batches, acknowledged=acknowledged,
+                             error=f"{type(exc).__name__}: {exc}"[:1000])
+            except Exception:
+                log.exception("could not persist collection gap")
+
+
+def start_quote_round(minute, mode, producer, start_indices):
+    thread = Thread(target=collect_quote_round, args=(minute, mode, producer, start_indices), daemon=True)
+    thread.start()
+    return thread
+
+
 def main():
     from kafka import KafkaProducer
-    import psycopg
-    import requests
+
     logging.basicConfig(level=logging.INFO)
     mode = os.getenv("QUOTE_MODE", "live")
     if mode not in ("live", "mock"):
@@ -119,7 +207,7 @@ def main():
                              value_serializer=lambda value: json.dumps(value, ensure_ascii=False).encode())
     Thread(target=send_watermarks, args=(producer,), daemon=True, name="quote-watermark").start()
     last_minute = None
-    index_thread = None
+    index_collector = IndexCollector()
     while True:
         now = datetime.now(CHINA)
         minute = scheduled_minute(now, last_minute)
@@ -127,75 +215,7 @@ def main():
             time.sleep(0.5)
             continue
         last_minute = minute
-        started = False
-        acknowledged = 0
-        expected = None
-        failed_batches = None
-        try:
-            if mode == "live":
-                if not ((9, 30) <= (now.hour, now.minute) <= (11, 30) or (13, 0) <= (now.hour, now.minute) <= (15, 0)):
-                    continue
-            record_round(os.environ["DATABASE_URL"], minute, "collecting")
-            started = True
-            if mode == "live":
-                calendar = requests.get(os.environ["CALENDAR_URL"], params={"trading_date": now.date().isoformat()},
-                    headers={"X-Openfinance-Token": os.environ["OPENFINANCE_INTERNAL_API_TOKEN"]}, timeout=15)
-                calendar.raise_for_status()
-                if calendar.json().get("is_open") is not True:
-                    log.warning("calendar closed or unavailable; no upstream request")
-                    record_round(os.environ["DATABASE_URL"], minute, "calendar_not_open_or_unknown")
-                    continue
-                if index_thread is None or not index_thread.is_alive():
-                    index_thread = Thread(target=collect_indices, args=(minute,), daemon=True)
-                    index_thread.start()
-                response = requests.get(os.environ["UNIVERSE_URL"], headers={"X-Openfinance-Token": os.environ["OPENFINANCE_INTERNAL_API_TOKEN"]}, timeout=120)
-                response.raise_for_status()
-                universe = response.json()
-                if not universe.get("symbols"):
-                    raise RuntimeError("security universe is empty")
-                if universe.get("stale"):
-                    log.warning("using stale security universe from %s", universe.get("as_of_date"))
-                items = collect_round(universe["symbols"], minute)
-            else:
-                symbols = [s.strip().upper() for s in os.getenv("QUOTE_SYMBOLS", "600519.SH,000001.SZ").split(",")]
-                def mock_fetch(batch, instant):
-                    return ({symbol: {"symbol": symbol, "name": "模拟数据", "price": 10.0+i,
-                        "previous_close": 10.0, "source": "mock", "source_time": instant.astimezone(timezone.utc).isoformat(),
-                        "captured_at": datetime.now(timezone.utc).isoformat(), "status": "valid"}
-                        for i, symbol in enumerate(batch)}, [])
-                if index_thread is None or not index_thread.is_alive():
-                    index_thread = Thread(target=collect_indices, args=(minute, mock_fetch), daemon=True)
-                    index_thread.start()
-                items = collect_round(symbols, minute, fetch=mock_fetch)
-            items = list(items)
-            persist_quote_metrics(items)
-            expected = len(items)
-            failed_batches = max((item.get("failed_batches", 0) for item in items), default=0)
-            record_round(os.environ["DATABASE_URL"], minute, "publishing", expected=expected, failed_batches=failed_batches)
-            pending = []
-            for item in items:
-                pending.append(producer.send("quotes.raw", key=item["symbol"].encode(), value=item))
-            for future in pending:
-                future.get(timeout=30)
-                acknowledged += 1
-            status = "incomplete" if failed_batches or any(item.get("status") in ("missing", "unsupported") for item in items) else "published"
-            record_round(os.environ["DATABASE_URL"], minute, status, expected=expected,
-                         failed_batches=failed_batches, acknowledged=acknowledged)
-            if mode == "live":
-                try:
-                    record_universe(os.environ["DATABASE_URL"], minute.date(), items)
-                except Exception:
-                    log.exception("could not record intraday universe for backfill")
-            log.info("published round %s records=%d", minute.isoformat(), len(pending))
-        except Exception as exc:
-            log.exception("snapshot collection failed; next round will be attempted")
-            if started:
-                try:
-                    record_round(os.environ["DATABASE_URL"], minute, "failed", expected=expected,
-                                 failed_batches=failed_batches, acknowledged=acknowledged,
-                                 error=f"{type(exc).__name__}: {exc}"[:1000])
-                except Exception:
-                    log.exception("could not persist collection gap")
+        start_quote_round(minute, mode, producer, index_collector.start)
 
 
 if __name__ == "__main__":
