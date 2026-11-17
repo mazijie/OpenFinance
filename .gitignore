@@ -45,6 +45,26 @@ venv/
 *.log
 *.tmp
 *.pid
+/output/
+/results/
+/reports/
+/measurements/
+/local_measurements/
+/test-results/
+/spark/samples/
+/tests/rag/evaluation_samples.json
+**/benchmark-results/
+**/test-results/
+**/measurements/
+/.coverage
+/htmlcov/
+/*.tar
+/temp.txt
+
+# Local documentation and private measurement reports
+/docs/
+/spark/README.md
+/spark/benchmark/README.md
 
 # IDE
 .idea/

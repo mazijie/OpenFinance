@@ -2,8 +2,6 @@
 
 OpenFinance is an open-source research platform for China’s financial markets. It brings together market data, financial news, and listed-company reports in a lakehouse, then makes them available through a web research assistant and APIs for market data, news, reports, and agent workflows.
 
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-
 ## What it does
 
 - **Market data:** Ingests A-share daily bars, maintains security and trading-calendar data, and serves historical daily, weekly, and monthly market queries.
@@ -17,7 +15,7 @@ OpenFinance is an open-source research platform for China’s financial markets.
 ### Requirements
 
 - Docker Engine or Docker Desktop with the Docker Compose v2 plugin.
-- Docker Compose and sufficient resources for local Ollama embeddings. The startup script selects NVIDIA GPU mode when both a GPU and Docker's NVIDIA runtime are available, otherwise CPU mode.
+- A reachable Ray cluster with GPU resources and a mounted Qwen embedding model for news and annual-report retrieval.
 - For chat, a DeepSeek API key entered in the web UI’s model settings. The key is sent with requests and is not stored in `.env`.
 
 ### Quick start
@@ -28,7 +26,7 @@ cd OpenFinance
 cp .env.example .env
 ```
 
-Review `.env` before deployment. Replace the example values for the internal API token, OpenSearch password, PDF parser token, and Airflow secrets and administrator password. PostgreSQL and MinIO also use development credentials defined in the Compose file; change them consistently in the services that connect to them before using the stack beyond local testing. Add provider credentials only for integrations you plan to use. Keep `.env` private and do not commit it.
+Review `.env` before deployment. Configure the Ray Dashboard and embedding service addresses, embedding API key, and paths accessible to Ray workers. Replace the example values for the internal API token, OpenSearch password, PDF parser token, and Airflow secrets and administrator password. PostgreSQL and MinIO also use development credentials defined in the Compose file; change them consistently in the services that connect to them before using the stack beyond local testing. Add provider credentials only for integrations you plan to use. Keep `.env` private and do not commit it.
 
 Build and start the default single-host stack:
 
@@ -37,9 +35,9 @@ bash scripts/compose.sh up -d --build
 bash scripts/compose.sh ps
 ```
 
-The default stack includes the backend, PostgreSQL, MinIO, OpenSearch, local Ollama embeddings, workers, Spark, Airflow, and the real-time quote pipeline. The backend runs `alembic upgrade head` before starting the API. Ollama downloads the configured embedding model during initialization, so the first startup may take a while and use significant disk space.
+The default stack includes the backend, PostgreSQL, MinIO, OpenSearch, an embedding supervisor, workers, Spark, Airflow, and the real-time quote pipeline. The backend runs `alembic upgrade head` before starting the API. The embedding supervisor deploys the Qwen model service to the configured Ray cluster.
 
-Detailed pipeline behavior, configuration, and operational limits are documented in the [finance pipeline guide](docs/finance-pipeline-guide.md), [Spark guide](spark/README.md), and [real-time quotes guide](docs/realtime-quotes.md).
+The Ray workers need the project dependencies, access to PostgreSQL and MinIO, and the configured model files. The embedding service uses two GPU replicas. Annual-report parsing uses Ray and MinerU; ensure the required parser dependencies are installed on the workers.
 
 ### Service URLs
 
@@ -54,21 +52,23 @@ Detailed pipeline behavior, configuration, and operational limits are documented
 | MinIO Console | <http://localhost:9001> |
 | Flink UI | <http://localhost:8083> |
 
-The Compose files are intended as a local, single-host reference deployment. They do not provide high availability or production security defaults. Replace sample credentials, restrict network access to development services, and arrange backups for persistent data before using the stack with important datasets. Configure a reachable Ray cluster and its storage endpoints for annual-report parsing at scale; see `.env.example` and the pipeline guide.
+The Compose files are intended as a local, single-host reference deployment. They do not provide high availability or production security defaults. Replace sample credentials, restrict network access to development services, and arrange backups for persistent data before using the stack with important datasets. Configure a reachable Ray cluster and its storage endpoints for annual-report parsing at scale; see `.env.example`.
 
 ## Development and contributions
 
-Issues and pull requests are welcome. For larger changes, open an [issue](https://github.com/mazijie/OpenFinance/issues) first. When submitting a [pull request](https://github.com/mazijie/OpenFinance/pulls), describe the user-visible change and include focused tests or documentation updates where appropriate. Install the Python dependencies from `requirements.txt`, then run relevant tests with `pytest -q`.
+Issues and pull requests are welcome. For larger changes, open an issue first. When submitting a pull request, describe the user-visible change and include focused tests or documentation updates where appropriate. Install the Python dependencies from `requirements.txt`, then run relevant tests with `pytest -q`.
 
-This project is licensed under the [Apache License 2.0](LICENSE). It provides financial data and research tools and does not constitute investment advice.
+This project is licensed under the Apache License 2.0; see `LICENSE`. It provides financial data and research tools and does not constitute investment advice.
 
-### 后端模块边界
+### Backend modules
 
-- `/api/chat`、`/api/chat/stream` 和 `/api/agent` 均使用 Harness。旧的 `HARNESS_V1_ENABLED` 开关和旧 Agent 已移除；曾设置为 `false` 的部署升级后也会使用 Harness，请从环境配置中删除该项。
-- `backend/lakehouse` 负责湖仓表和读写；`backend/job_store` 负责采集任务、租约、配额和采集运行状态。`backend/repositories` 面向业务查询。
-- `backend/providers` 负责上游接口访问与响应解析；`backend/ingestion` 负责采集编排、去重和入库。包含采集编排的新闻采集器仍放在 `ingestion`。
-- `backend/rag/common`、`news` 和 `annual_reports` 分别存放公共、新闻和年报检索能力。
-- 新闻采集、清洗和索引入口分别为 `python -m backend.ingestion.jobs.ingest_news`、`python -m backend.pipelines.news_bronze_to_silver` 和 `python -m backend.pipelines.news_rag_index`。
-- 年报通过 Ray 执行解析；`backend/pdf_parser` 包含 Ray 使用的解析服务类，`pdf-parser/requirements.txt` 保存解析节点依赖。
+- `/api/chat`, `/api/chat/stream`, and `/api/agent` use the Harness.
+- `backend/lakehouse` manages lakehouse tables and reads and writes; `backend/job_store` manages ingestion jobs, leases, quotas, and run state. `backend/repositories` provides business queries.
+- `backend/providers` handles upstream requests and response parsing; `backend/ingestion` handles ingestion orchestration, deduplication, and persistence, including news collectors that orchestrate ingestion.
+- `backend/rag/common`, `backend/rag/news`, and `backend/rag/annual_reports` contain shared, news, and annual-report retrieval code, respectively.
+- News ingestion, normalization, and indexing start at `python -m backend.ingestion.jobs.ingest_news`, `python -m backend.pipelines.news_bronze_to_silver`, and `python -m backend.pipelines.news_rag_index`, respectively.
+- Annual reports are parsed with Ray. `backend/pdf_parser` contains the parsing service used by Ray, and `pdf-parser/requirements.txt` lists the parsing node dependencies.
 
-升级前应完成旧接口调用迁移：年报解析改用 `/internal/jobs/annual-reports-ray` 系列接口，新闻任务改用上述 `backend` 模块；旧新闻 `limit` 参数已移除。停止或完成使用固定预算的 Agent 任务后再升级，所有新任务使用动态预算。实时窗口迁移的盘点和重算步骤见 `docs/realtime-quotes.md`。
+Annual-report parsing jobs use the `/internal/jobs/annual-reports-ray` endpoints. Real-time window recomputation is available through `python -m realtime.recompute` for ranges covered by retained Kafka data.
+
+News and annual-report embeddings use a Qwen model service on Ray. The embedding supervisor deploys and monitors the service, and index generations are validated before activation.

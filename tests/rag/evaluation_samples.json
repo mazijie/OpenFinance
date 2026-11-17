@@ -1,9 +1,0 @@
-[
-  {
-    "id": "finance-event-001",
-    "question": "某公司近期发布业绩后股价波动的原因是什么？",
-    "expected_article_ids": [],
-    "expected_chunk_ids": [],
-    "notes": "待基于本地 Silver 新闻库人工标注；空数组表示样例模板，不能计入质量指标。"
-  }
-]
