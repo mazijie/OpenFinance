@@ -36,19 +36,10 @@ def test_next_round_can_publish_while_previous_round_is_waiting(monkeypatch):
 
     first_started = Event()
     release_first = Event()
-    published = []
+    stored = []
     states = []
     first = datetime(2026, 11, 2, 9, 30, tzinfo=collector.CHINA)
     second = first + timedelta(minutes=1)
-
-    class Future:
-        def get(self, timeout):
-            return None
-
-    class Producer:
-        def send(self, topic, *, key, value):
-            published.append(value["round_id"])
-            return Future()
 
     def collect(symbols, minute, fetch):
         if minute == first:
@@ -59,22 +50,20 @@ def test_next_round_can_publish_while_previous_round_is_waiting(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "unused")
     monkeypatch.setattr(collector, "record_round", lambda dsn, minute, status, **kwargs: states.append((minute, status)))
     monkeypatch.setattr(collector, "collect_round", collect)
-    monkeypatch.setattr(collector, "persist_quote_metrics", lambda rows: None)
-    producer = Producer()
+    monkeypatch.setattr(collector, "store_round", lambda dsn, minute, items, failed: stored.append(minute.isoformat()))
+    producer = None
     first_thread = collector.start_quote_round(first, "mock", producer, lambda *args: None)
     try:
         assert first_started.wait(5)
         second_thread = collector.start_quote_round(second, "mock", producer, lambda *args: None)
         second_thread.join(5)
         assert not second_thread.is_alive()
-        assert published == [second.isoformat()]
-        assert (second, "published") in states
+        assert stored == [second.isoformat()]
     finally:
         release_first.set()
         first_thread.join(5)
     assert not first_thread.is_alive()
-    assert published == [second.isoformat(), first.isoformat()]
-    assert (first, "published") in states
+    assert stored == [second.isoformat(), first.isoformat()]
 
 
 def test_index_collection_does_not_overlap_between_rounds(monkeypatch):

@@ -4,32 +4,37 @@ SET 'execution.checkpointing.interval' = '30 s';
 SET 'table.local-time-zone' = 'UTC';
 SET 'execution.checkpointing.storage' = 'filesystem';
 SET 'execution.checkpointing.dir' = 'file:///opt/flink/checkpoints';
-SET 'table.exec.state.ttl' = '1 h';
+SET 'execution.checkpointing.externalized-checkpoint-retention' = 'RETAIN_ON_CANCELLATION';
+SET 'table.exec.state.ttl' = '25 h';
 SET 'table.exec.source.idle-timeout' = '1 min';
 CREATE TABLE quotes_raw (
-  symbol STRING, name STRING, price DOUBLE, source STRING, source_time STRING,
+  event_id STRING, symbol STRING, name STRING, price DOUBLE, source STRING, source_time STRING,
   captured_at STRING, previous_close DOUBLE, `status` STRING, round_id STRING,
   expected INT, failed_batches INT, proc_time AS PROCTIME(),
   event_time AS TO_TIMESTAMP(REPLACE(SUBSTRING(captured_at, 1, 19), 'T', ' '), 'yyyy-MM-dd HH:mm:ss'),
   WATERMARK FOR event_time AS event_time - INTERVAL '1' SECOND * __LATENESS_SECONDS__
 ) WITH (
   'connector' = 'kafka', 'topic' = 'quotes.raw',
-  'properties.bootstrap.servers' = 'kafka:9092', 'properties.group.id' = 'flink-quotes-v1',
-  'scan.startup.mode' = 'earliest-offset', 'format' = 'json'
+  'properties.bootstrap.servers' = 'kafka:9092', 'properties.group.id' = 'flink-quotes-v2',
+  'scan.startup.mode' = 'latest-offset', 'format' = 'json'
 );
 CREATE TABLE quotes_latest (
   symbol STRING, name STRING, price DOUBLE, source STRING, source_time STRING, captured_at STRING,
   previous_close DOUBLE, `status` STRING, round_id STRING
 ) WITH (
   'connector' = 'kafka', 'topic' = 'quotes.latest',
-  'properties.bootstrap.servers' = 'kafka:9092', 'format' = 'json'
+  'properties.bootstrap.servers' = 'kafka:9092', 'format' = 'json',
+  'sink.delivery-guarantee' = 'exactly-once', 'sink.transactional-id-prefix' = 'openfinance-quotes-latest-v2',
+  'properties.transaction.timeout.ms' = '600000'
 );
 CREATE TABLE quotes_windows (
   symbol STRING, window_start TIMESTAMP(3), window_end TIMESTAMP(3),
   sample_min DOUBLE, sample_max DOUBLE, sample_avg DOUBLE, sample_count BIGINT, window_basis STRING
 ) WITH (
   'connector' = 'kafka', 'topic' = 'quotes.windows',
-  'properties.bootstrap.servers' = 'kafka:9092', 'format' = 'json'
+  'properties.bootstrap.servers' = 'kafka:9092', 'format' = 'json',
+  'sink.delivery-guarantee' = 'exactly-once', 'sink.transactional-id-prefix' = 'openfinance-quotes-windows-v2',
+  'properties.transaction.timeout.ms' = '600000'
 );
 CREATE TABLE quotes_market (
   round_id STRING, expected BIGINT, received BIGINT, valid BIGINT,
@@ -38,24 +43,40 @@ CREATE TABLE quotes_market (
 ) WITH (
   'connector' = 'upsert-kafka', 'topic' = 'quotes.market',
   'properties.bootstrap.servers' = 'kafka:9092',
-  'key.format' = 'json', 'value.format' = 'json'
+  'key.format' = 'json', 'value.format' = 'json',
+  'sink.delivery-guarantee' = 'exactly-once', 'sink.transactional-id-prefix' = 'openfinance-quotes-market-v2',
+  'properties.transaction.timeout.ms' = '600000'
 );
 CREATE TABLE quotes_late (
   symbol STRING, round_id STRING, captured_at STRING, price DOUBLE, `status` STRING,
   watermark_time TIMESTAMP(3)
 ) WITH (
   'connector' = 'kafka', 'topic' = 'quotes.late',
-  'properties.bootstrap.servers' = 'kafka:9092', 'format' = 'json'
+  'properties.bootstrap.servers' = 'kafka:9092', 'format' = 'json',
+  'sink.delivery-guarantee' = 'exactly-once', 'sink.transactional-id-prefix' = 'openfinance-quotes-late-v2',
+  'properties.transaction.timeout.ms' = '600000'
+);
+CREATE TABLE quotes_expired (
+  event_id STRING, captured_at STRING
+) WITH (
+  'connector' = 'kafka', 'topic' = 'quotes.expired',
+  'properties.bootstrap.servers' = 'kafka:9092', 'format' = 'json',
+  'sink.delivery-guarantee' = 'exactly-once', 'sink.transactional-id-prefix' = 'openfinance-quotes-expired-v2',
+  'properties.transaction.timeout.ms' = '600000'
 );
 CREATE VIEW unique_quotes AS
 SELECT symbol, name, price, source, source_time, captured_at, previous_close, `status`, round_id, expected, failed_batches, proc_time, event_time
-FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY round_id, symbol ORDER BY proc_time ASC) AS rownum
-      FROM quotes_raw WHERE round_id IS NOT NULL) WHERE rownum = 1;
+FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY event_id ORDER BY proc_time ASC) AS rownum
+      FROM quotes_raw WHERE event_id IS NOT NULL
+        AND event_time > LOCALTIMESTAMP - INTERVAL '24' HOUR) WHERE rownum = 1;
 CREATE VIEW ontime_quotes AS
 SELECT * FROM unique_quotes
 WHERE CURRENT_WATERMARK(event_time) IS NULL OR event_time > CURRENT_WATERMARK(event_time);
 EXECUTE STATEMENT SET
 BEGIN
+  INSERT INTO quotes_expired
+    SELECT event_id, captured_at FROM quotes_raw WHERE event_id IS NOT NULL
+      AND event_time <= LOCALTIMESTAMP - INTERVAL '24' HOUR;
   INSERT INTO quotes_latest SELECT symbol, name, price, source, source_time, captured_at, previous_close, `status`, round_id
     FROM unique_quotes;
   INSERT INTO quotes_windows

@@ -71,6 +71,24 @@ def persist(conn, topic, row):
                 failed_batches=EXCLUDED.failed_batches
                 WHERE openfinance.realtime_market_rounds.received <= EXCLUDED.received""",
                 (row["round_id"], row["expected"], row["received"], row["valid"], row["rising"], row["falling"], row["flat"], row["failed_batches"]))
+        elif topic == "quotes.expired":
+            cur.execute("""INSERT INTO openfinance.realtime_quote_expired (event_id,captured_at)
+                VALUES (%s,%s) ON CONFLICT (event_id) DO NOTHING""",
+                (row["event_id"], row["captured_at"]))
+        else:
+            raise ValueError(f"unsupported quote topic: {topic}")
+
+
+def process_message(conn, message):
+    """Commit the inbox marker and all database effects together."""
+    with conn.transaction():
+        inserted = conn.execute("""INSERT INTO openfinance.realtime_quote_inbox
+            (topic,partition_id,kafka_offset) VALUES (%s,%s,%s)
+            ON CONFLICT DO NOTHING RETURNING kafka_offset""",
+            (message.topic, message.partition, message.offset)).fetchone()
+        if inserted and message.value is not None:
+            persist(conn, message.topic, message.value)
+        return bool(inserted)
 
 
 def main():
@@ -81,16 +99,12 @@ def main():
     while True:
         try:
             with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
-                consumer = KafkaConsumer("quotes.latest", "quotes.windows", "quotes.market", "quotes.late", bootstrap_servers=os.getenv("KAFKA_BOOTSTRAP", "kafka:9092"),
-                    group_id="quotes-postgres-v1", enable_auto_commit=False, auto_offset_reset="earliest",
+                consumer = KafkaConsumer("quotes.latest", "quotes.windows", "quotes.market", "quotes.late", "quotes.expired", bootstrap_servers=os.getenv("KAFKA_BOOTSTRAP", "kafka:9092"),
+                    group_id="quotes-postgres-v1", enable_auto_commit=False, auto_offset_reset="earliest", isolation_level="read_committed",
                     value_deserializer=lambda value: json.loads(value.decode()) if value is not None else None)
                 try:
                     for message in consumer:
-                        if message.value is None:
-                            consumer.commit({TopicPartition(message.topic, message.partition): OffsetAndMetadata(message.offset + 1, "", -1)})
-                            continue
-                        with conn.transaction():
-                            persist(conn, message.topic, message.value)
+                        process_message(conn, message)
                         consumer.commit({TopicPartition(message.topic, message.partition):
                                          OffsetAndMetadata(message.offset + 1, "", -1)})
                 finally:

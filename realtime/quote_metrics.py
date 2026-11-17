@@ -1,14 +1,10 @@
 """Persist optional quote metrics separately from Flink aggregation."""
-import logging
-import os
 import time
 
-log = logging.getLogger(__name__)
 _last_cleanup = 0.0
 
 
-def persist_quote_metrics(rows):
-    import psycopg
+def persist_quote_metrics(conn, rows):
     global _last_cleanup
 
     values = [(row["symbol"], row["source_time"], row["captured_at"],
@@ -17,10 +13,8 @@ def persist_quote_metrics(rows):
               for row in rows if row.get("source_time") and row.get("price") is not None]
     if not values:
         return
-    try:
-        with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
-            with conn.cursor() as cursor:
-                cursor.executemany("""INSERT INTO openfinance.realtime_quote_metrics
+    with conn.cursor() as cursor:
+        cursor.executemany("""INSERT INTO openfinance.realtime_quote_metrics
                     (symbol, source_time, captured_at, volume_lots, market_cap_cny, pe_ratio, day_open, day_high, day_low)
                     VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (symbol, source_time) DO UPDATE SET
                     source_time=EXCLUDED.source_time, captured_at=EXCLUDED.captured_at,
@@ -29,8 +23,6 @@ def persist_quote_metrics(rows):
                     day_high=EXCLUDED.day_high, day_low=EXCLUDED.day_low
                     WHERE openfinance.realtime_quote_metrics.source_time <= EXCLUDED.source_time
                     AND openfinance.realtime_quote_metrics.captured_at <= EXCLUDED.captured_at""", values)
-                if time.monotonic() - _last_cleanup > 86400:
-                    cursor.execute("DELETE FROM openfinance.realtime_quote_metrics WHERE captured_at < now() - interval '3 days'")
-                    _last_cleanup = time.monotonic()
-    except Exception:
-        log.exception("could not persist quote metrics")
+        if time.monotonic() - _last_cleanup > 86400:
+            cursor.execute("DELETE FROM openfinance.realtime_quote_metrics WHERE captured_at < now() - interval '3 days'")
+            _last_cleanup = time.monotonic()

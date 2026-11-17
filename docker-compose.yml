@@ -558,7 +558,7 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
       KAFKA_NUM_PARTITIONS: 3
-      KAFKA_LOG_RETENTION_HOURS: ${REALTIME_KAFKA_RETENTION_HOURS:-24}
+      KAFKA_LOG_RETENTION_HOURS: ${REALTIME_KAFKA_RETENTION_HOURS:-72}
     volumes:
       - realtime_kafka:/var/lib/kafka/data
     healthcheck:
@@ -613,10 +613,11 @@ services:
       flink-taskmanager: {condition: service_started}
     environment:
       QUOTE_LATENESS_SECONDS: ${QUOTE_LATENESS_SECONDS:-120}
+      QUOTE_RESTORE_PATH: ${QUOTE_RESTORE_PATH:-}
       FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
         parallelism.default: 1
-    volumes: ["./realtime/job.sql:/opt/flink/job.sql:ro", "./realtime/submit.sh:/opt/flink/submit.sh:ro"]
+    volumes: ["./realtime/job.sql:/opt/flink/job.sql:ro", "./realtime/submit.sh:/opt/flink/submit.sh:ro", "realtime_checkpoints:/opt/flink/checkpoints"]
     entrypoint: ["/bin/bash", "-c"]
     command: ["exec /bin/bash /opt/flink/submit.sh"]
     restart: on-failure
@@ -625,13 +626,12 @@ services:
     depends_on:
       kafka: {condition: service_healthy}
     entrypoint: ["/bin/bash", "-c"]
-    command: ["for topic in quotes.raw quotes.latest quotes.windows quotes.market quotes.late; do /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic $$topic --partitions 3 --replication-factor 1 || exit 1; done"]
+    command: ["for topic in quotes.raw quotes.latest quotes.windows quotes.market quotes.late quotes.expired; do /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic $$topic --partitions 3 --replication-factor 1 || exit 1; done"]
   quote-collector:
     build:
       context: .
       dockerfile: realtime/Dockerfile
     depends_on:
-      kafka: {condition: service_healthy}
       postgres: {condition: service_healthy}
       backend: {condition: service_started}
     environment:
@@ -655,6 +655,19 @@ services:
       DATABASE_URL: postgresql://openfinance:openfinance@postgres:5432/openfinance
       KAFKA_BOOTSTRAP: kafka:9092
     command: ["python", "-m", "realtime.intraday_backfill"]
+    restart: unless-stopped
+  quote-outbox:
+    build:
+      context: .
+      dockerfile: realtime/Dockerfile
+    depends_on:
+      kafka: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+      backend: {condition: service_started}
+    environment:
+      DATABASE_URL: postgresql://openfinance:openfinance@postgres:5432/openfinance
+      KAFKA_BOOTSTRAP: kafka:9092
+    command: ["python", "-m", "realtime.outbox"]
     restart: unless-stopped
   quote-consumer:
     build:

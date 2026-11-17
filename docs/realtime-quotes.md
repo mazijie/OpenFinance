@@ -31,7 +31,7 @@ docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-s
 
 一分钟窗口按 `captured_at` 的 UTC 采集时间计算，只包含 `valid` 快照，最高、最低及平均值是**采样统计**。Flink 通过水位线允许乱序，`QUOTE_LATENESS_SECONDS` 默认为 120，可设置 0—1800 秒；修改后需重新提交 Flink 作业。水位线由每个 Kafka 分区上的定时心跳推进，采集器不访问上游也会继续发心跳，因此休市空闲时可关闭最后的窗口。采集器、Kafka 或 Flink 不可用时心跳不能保证推进，窗口可能延迟关闭。每条心跳会占用 Kafka 消息空间；采集时间必须为 UTC，Flink 的时间提取精确到秒。
 
-当数据的采集时间不晚于当前水位线，在线统计不会纳入该快照；Flink 将其写入 `quotes.late`，消费者幂等记录到 `openfinance.realtime_quote_late`。页面在存在未处理的超期窗口时提示，API 返回 `late_windows`。超期判断按水位线保守执行：即使该分钟窗口还未最终关闭，只要事件已经落后于水位线，仍记录并交由重算处理。重复消息在 Flink 的去重状态保留期间不会再次计入；状态默认一小时，过期后的旧数据只有在落后于水位线时才会被标记超期。
+当数据的采集时间不晚于当前水位线，在线统计不会纳入该快照；Flink 将其写入 `quotes.late`，消费者幂等记录到 `openfinance.realtime_quote_late`。页面在存在未处理的超期窗口时提示，API 返回 `late_windows`。超期判断按水位线保守执行：即使该分钟窗口还未最终关闭，只要事件已经落后于水位线，仍记录并交由重算处理。行情事件以轮次和股票生成稳定 ID，Flink 去重和市场聚合状态保留至少 25 小时；采集时间超过 24 小时的原始事件不再参与在线处理。
 
 ### 查看和重算窗口
 
@@ -47,7 +47,22 @@ docker compose run --rm --no-deps quote-consumer python -m realtime.recompute --
 
 上线时先停止旧版采集器、Flink 作业及结果消费者，执行数据库迁移 0008，再启动新版组件；不要让新旧作业同时处理同一链路。已有处理时间窗口保留但标为 `legacy_processing_time`，不会冒充采集时间窗口；旧版 Kafka 结果重放也不能覆盖新版窗口。新拓扑与旧 checkpoint 不兼容，应按运行环境重新提交并核对作业数量；原始 Kafka 保留期内的数据可供重新处理或按上述方式重算。不要清空现有业务数据。
 
-Kafka 默认保留 24 小时（可通过 `REALTIME_KAFKA_RETENTION_HOURS` 设置）；采集失败或 Kafka 写入前丢失的快照不能恢复。单 broker 和本地 checkpoint 不提供高可用或端到端 exactly-once。
+### 恢复和恰好一次边界
+
+采集结果、个股指标及 outbox 记录在 PostgreSQL 同一事务中提交。`quote-outbox` 逐条发布未完成记录，Kafka 确认后标记完成；确认后崩溃可能导致重发，Flink 在聚合前按事件 ID 去重。四个行情输出和过期事件输出使用 checkpoint 和 Kafka 事务，消费者只读已提交消息，并在同一数据库事务中保存 inbox 标记和业务结果。Kafka offset 随后提交，重放已处理消息不会重复写库。指数采集仍独立进行。
+
+有效期从 `captured_at` 起算 24 小时，超过有效期仍在 outbox 的事件会标记 `expired` 并记录日志；已经进入 Kafka 但超过有效期的事件由 Flink 过滤，并按事件 ID 记录在 `realtime_quote_expired`。可用以下查询查看发布积压和过期数量：
+
+```sql
+SELECT state, count(*), min(captured_at) FROM openfinance.realtime_quote_outbox GROUP BY state;
+SELECT count(*) FROM openfinance.realtime_quote_expired;
+```
+
+Kafka 默认保留 72 小时（`REALTIME_KAFKA_RETENTION_HOURS` 不应设置为小于 72）。outbox 和 inbox 当前不自动清理；监控数据库空间。不要删除 inbox 后重置消费者 offset，也不要在保留 inbox 的情况下删除并重建同名 topic，否则 offset 身份可能冲突。保证依赖 Kafka、PostgreSQL 和 checkpoint 数据保持可用，以及机器时钟同步；单 broker 和本地 checkpoint 不提供高可用。不能保证上游未返回、持久化前丢失或已过期的行情完整。
+
+升级到迁移 `0021_realtime_outbox_inbox` 时，先停止旧采集器，等待旧 Flink 和消费者排空现有消息，再停止旧 Flink 作业及消费者。执行迁移并构建新镜像，确认没有旧 Flink 作业运行后启动新作业；首次启动的新作业从原始 topic 的最新位置读取，必须确认作业开始消费后再启动 outbox 发布器和采集器。恢复时使用 checkpoint 中的位置。不要让新旧作业同时运行，升级前的业务结果保持不变。
+
+提交器会在 checkpoint 卷留下 `quotes-v2-submitted` 标记，阻止无状态重复提交。TaskManager 故障由 Flink 从 checkpoint 自动恢复；JobManager 故障或作业终止后，先确认旧作业已停止、Kafka 数据仍在，再从同一拓扑的最新完整保留 checkpoint 或 savepoint 恢复，设置 `QUOTE_RESTORE_PATH=file:///opt/flink/checkpoints/...` 重新提交。每个恢复路径只能提交一次；失败时先检查作业状态和 checkpoint，再由运维处理标记，禁止直接无状态重放。拓扑升级需事先准备兼容的 savepoint 或重新制定切换边界。检查作业运行和 checkpoint 成功后移除恢复环境变量，防止下次启动重用旧状态。监控 Flink checkpoint、`quote-outbox` 日志、Kafka 消费延迟和数据库磁盘。
 
 行情页面的分时图展示最近有数据的交易日的一分钟采样均价，采样窗口由 Flink 生成，并非逐笔行情。个股成交量（手）、总市值（元）及市盈率来自腾讯同一时刻的快照，存储在 `realtime_quote_metrics`；接口只在证券和行情时间匹配、且指标采集时间不晚于查询截止时间时返回它们，缺失则为 null。指标保留三天，采集器每天清理一次；市盈率采用上游口径，非正值在页面显示为缺失或亏损。日线、周线和月线通过 `/api/market/history` 按需加载历史；页面不再提供日期或数据截止时间控件。公开行情接口不接受 `as_of` 参数，内部研究仍使用截止时间保证历史可见性。问答可通过 `realtime_quote` 只读工具查询六位代码或带交易所后缀的代码；若六位代码匹配多个交易所，须提供后缀。没有新行情或服务不可用时不会将旧价格作为实时价格回答。
 

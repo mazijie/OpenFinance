@@ -12,7 +12,7 @@ def main():
     row = {"symbol": "TEST.ISOLATED", "name": "模拟数据", "price": 12.0,
            "previous_close": 10.0, "source": "mock", "source_time": instant,
            "captured_at": instant, "status": "valid", "round_id": instant,
-           "expected": 1, "failed_batches": 0}
+           "event_id": instant + "/TEST.ISOLATED", "expected": 1, "failed_batches": 0}
     producer = KafkaProducer(bootstrap_servers=os.environ["KAFKA_BOOTSTRAP"], acks="all",
                              retries=3, enable_idempotence=True,
                              value_serializer=lambda value: json.dumps(value).encode())

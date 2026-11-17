@@ -11,7 +11,7 @@ from realtime.recompute import aggregate, read_snapshot, write_results
 from realtime.consumer import persist
 
 UTC = timezone.utc
-BASE = datetime(2020, 1, 1, tzinfo=UTC)
+BASE = datetime.now(UTC).replace(second=0, microsecond=0) - timedelta(minutes=5)
 ROUND1 = BASE.isoformat()
 ROUND2 = (BASE + timedelta(minutes=1)).isoformat()
 ROUND3 = (BASE + timedelta(minutes=2)).isoformat()
@@ -27,7 +27,7 @@ class EventTimeIntegration(unittest.TestCase):
             captured = (BASE + timedelta(seconds=seconds)).isoformat()
             row = {"symbol": "TEST.SIM", "name": "fixture", "price": price, "previous_close": 10.0,
                    "source": "mock", "source_time": captured, "captured_at": captured,
-                   "status": "valid", "round_id": round_id, "expected": 1, "failed_batches": 0}
+                   "status": "valid", "round_id": round_id, "event_id": round_id + "/TEST.SIM", "expected": 1, "failed_batches": 0}
             producer.send("quotes.raw", key=b"TEST.SIM", value=row).get(timeout=20)
         def heartbeat(seconds):
             for part in producer.partitions_for("quotes.raw"):
