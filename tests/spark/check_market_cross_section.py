@@ -10,6 +10,7 @@ from build_market_cross_section import build_cross_section
 
 spark = SparkSession.builder.master('local[2]').appName('test-market-cross-section').getOrCreate()
 try:
+    spark.sparkContext.setLogLevel('ERROR')
     start = date(2026, 1, 1)
     now = datetime(2026, 2, 1)
     rows = [('A', 'A', 'SH', start + timedelta(days=i), float(i + 1), 100.0, float(i + 1) * 10, 0.1,
@@ -42,6 +43,22 @@ try:
     zero_rows = [('C', 'C', 'SH', start + timedelta(days=i), 10.0, 0.0 if i < 5 else 1.0, 10.0, 0.1,
                   False, 'none', now, now, '1', str(i)) for i in range(6)]
     assert build_cross_section(spark.createDataFrame(zero_rows, columns)).orderBy('trading_date').collect()[-1].volume_ratio_5d is None
+    rows = []
+    for symbol, multiplier in [('A', 1.0), ('B', 2.0), ('C', 2.0)]:
+        for i in range(121):
+            price = (100.0 + i) if i != 100 else 50.0
+            rows.append((symbol, symbol, 'SH', start + timedelta(days=i), price * multiplier,
+                         10.0, 10.0 * (i + 1) * multiplier, .1, False, 'none', now, now, '1', str(i)))
+    factors = build_cross_section(spark.createDataFrame(rows, schema)).filter("trading_date = date'2026-05-01'").orderBy('security_id').collect()
+    assert len(factors) == 3
+    first = factors[0]
+    assert abs(first.return_120d - 1.2) < 1e-9
+    assert abs(first.ma_60d - ((sum(range(161, 221)) - 200 + 50) / 60)) < 1e-9
+    assert abs(first.max_drawdown_60d - (1 - 50 / 199)) < 1e-9
+    assert abs(first.avg_turnover_60d - .1) < 1e-9
+    assert abs(first.amount_change_20d - (111.5 / 90.5 - 1)) < 1e-9
+    assert [r.amount_percentile for r in factors] == [0.0, 0.5, 0.5]
+    assert all(r.return_120d_percentile == 0.0 for r in factors)
     print('PASS market cross section')
 finally:
     spark.stop()

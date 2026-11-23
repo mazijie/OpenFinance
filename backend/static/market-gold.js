@@ -121,5 +121,57 @@
     }
     loadScreen(rankingPeriod);
   });
+  const factorForm = document.querySelector('#factorScreenForm');
+  if (factorForm) {
+    const fields = {
+      return_1d: '1 日收益', return_5d: '5 日收益', return_20d: '20 日收益', return_60d: '60 日收益', return_120d: '120 日收益',
+      ma_60d: '60 日均价', ma_120d: '120 日均价', volatility_20d_annualized: '20 日波动率',
+      volatility_60d_annualized: '60 日波动率', max_drawdown_60d: '60 日最大回撤', amount: '成交额',
+      avg_amount_20d: '20 日平均成交额', amount_change_20d: '成交额变化率', turnover: '换手率',
+      avg_turnover_20d: '20 日平均换手率', avg_turnover_60d: '60 日平均换手率'
+    };
+    const percentileBases = ['return_1d', 'return_5d', 'return_20d', 'return_60d', 'return_120d',
+      'volatility_20d_annualized', 'volatility_60d_annualized', 'max_drawdown_60d', 'amount', 'avg_amount_20d',
+      'amount_change_20d', 'turnover', 'avg_turnover_20d', 'avg_turnover_60d'];
+    for (const field of percentileBases) fields[`${field}_percentile`] = `${fields[field]}分位数`;
+    const options = Object.entries(fields).map(([key, label]) => `<option value="${key}">${label}</option>`).join('');
+    const sort = document.querySelector('#factorSort');
+    const conditions = document.querySelector('#factorConditions');
+    const output = document.querySelector('#factorScreenResult');
+    sort.innerHTML = options;
+    function addCondition() {
+      if (conditions.children.length >= 20) return;
+      const row = document.createElement('div');
+      row.className = 'factor-controls factor-condition';
+      row.innerHTML = `<label>指标 <select aria-label="条件指标">${options}</select></label><label>下限 <input type="number" step="any" aria-label="下限"></label><label>上限 <input type="number" step="any" aria-label="上限"></label><button type="button" class="secondary-button" aria-label="删除条件">删除</button>`;
+      row.querySelector('button').addEventListener('click', () => row.remove());
+      conditions.appendChild(row);
+    }
+    document.querySelector('#factorAdd').addEventListener('click', addCondition);
+    addCondition();
+    let requestId = 0;
+    factorForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      const filters = [];
+      for (const row of conditions.children) {
+        const [min, max] = row.querySelectorAll('input');
+        if (min.value === '' && max.value === '') continue;
+        const filter = {field: row.querySelector('select').value};
+        if (min.value !== '') filter.min = Number(min.value);
+        if (max.value !== '') filter.max = Number(max.value);
+        filters.push(filter);
+      }
+      const params = new URLSearchParams({sort_by: sort.value, direction: factorForm.elements.direction.value, filters: JSON.stringify(filters), limit: '100'});
+      if (factorForm.elements.trading_date.value) params.set('trading_date', factorForm.elements.trading_date.value);
+      const id = ++requestId;
+      output.textContent = '正在查询…';
+      try {
+        const data = await get(`/api/market/gold/screen?${params}`);
+        if (id !== requestId) return;
+        const field = params.get('sort_by');
+        output.innerHTML = data.items.length ? `<p>交易日 ${escape(data.trading_date)} · ${data.items.length} 条</p><table><thead><tr><th>证券</th><th>${escape(fields[field])}</th><th>收盘价</th></tr></thead><tbody>${data.items.map(row => `<tr><td>${escape(row.symbol)}</td><td>${value(row[field])}</td><td>${value(row.close)}</td></tr>`).join('')}</tbody></table>` : '<p>没有符合条件的证券。</p>';
+      } catch (error) { if (id === requestId) output.textContent = '筛选失败，请检查条件后重试。'; }
+    });
+  }
   loadScreen('day');
 })();

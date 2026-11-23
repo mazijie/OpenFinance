@@ -17,7 +17,7 @@ from backend.harness.policy import PolicyGuard
 from backend.harness.store import HarnessStore
 from backend.harness.web import WebResearchService
 from backend.services.finance_service import FinanceService
-from backend.services.market_gold_service import MarketGoldService
+from backend.services.market_gold_service import MarketGoldService, SORT_FIELDS
 
 
 @dataclass(slots=True)
@@ -66,13 +66,20 @@ class AnnualReportSearchInput(BaseModel):
         return self
 
 
+class MarketFilter(BaseModel):
+    field: str = Field(description='筛选字段，支持：' + ', '.join(SORT_FIELDS))
+    min: float | None = Field(default=None, description='下限，包含该值')
+    max: float | None = Field(default=None, description='上限，包含该值')
+
+
 class MarketScreenInput(BaseModel):
     trading_date: str | None = Field(default=None, description="交易日 YYYY-MM-DD，默认最近交易日")
-    sort_by: Literal['return_1d', 'return_5d', 'return_20d', 'amount', 'avg_amount_1d', 'avg_amount_5d', 'avg_amount_20d', 'ma_5d', 'ma_20d', 'price_ma_5d_deviation', 'price_ma_20d_deviation', 'volatility_20d_annualized', 'avg_volume_5d', 'volume_ratio_5d'] = 'return_1d'
+    sort_by: str = Field(default='return_1d', description='排序字段，支持：' + ', '.join(SORT_FIELDS))
     direction: Literal['asc', 'desc'] = 'desc'
     limit: int = Field(default=20, ge=1, le=100)
     min_value: float | None = None
     max_value: float | None = None
+    filters: list[MarketFilter] = Field(default_factory=list, description="组合条件取交集；分位数范围为 0 到 1")
 
 
 class StockOverviewInput(BaseModel):
@@ -121,7 +128,7 @@ class ToolRegistry:
             result = MarketGoldService().screen(as_of=self.context.as_of,
                 trading_date=date.fromisoformat(request.trading_date) if request.trading_date else None,
                 sort_by=request.sort_by, direction=request.direction, limit=request.limit,
-                min_value=request.min_value, max_value=request.max_value)
+                min_value=request.min_value, max_value=request.max_value, filters=[item.model_dump(exclude_none=True) for item in request.filters])
             doc = EvidenceDocument(evidence_id=f"market-screen:{self.context.turn_id}:{request.model_dump_json()}",
                 source_type="market", source_id=str(result['trading_date']), title="全市场行情筛选",
                 text=_dump(result), locator=str(result['trading_date']), metadata={"screen": result})
@@ -253,7 +260,7 @@ class ToolRegistry:
 
         return [
             StructuredTool.from_function(func=market_screen, name="market_screen", args_schema=MarketScreenInput,
-                description="按收益、成交额、均线、波动率或成交量筛选和排序全市场股票。历史行情使用当前已知版本。"),
+                description="按收益、成交额、均线、波动率、回撤、换手率及其分位数组合筛选和排序全市场股票。历史行情使用当前已知版本。"),
             StructuredTool.from_function(func=stock_overview, name="stock_overview", args_schema=StockOverviewInput,
                 description="查询单股行情概览及相关新闻、年报证据。"),
             StructuredTool.from_function(

@@ -51,6 +51,39 @@ def build_cross_section(bars):
     returns20 = order.rowsBetween(-19, 0)
     result = result.withColumn('volatility_20d_annualized', F.when(
         F.count('return_1d').over(returns20) == 20, F.stddev_samp('return_1d').over(returns20) * F.sqrt(F.lit(252.0))))
+    for n in (60, 120):
+        window = order.rowsBetween(-(n - 1), 0)
+        lag = F.lag('close', n).over(order)
+        lag_valid = F.lag(valid, n).over(order)
+        close_ok = valid & F.col('close').isNotNull() & (F.col('close') > 0)
+        complete = F.count(F.when(close_ok, 1)).over(window) == n
+        result = result.withColumn(f'return_{n}d', F.when(complete & lag_valid & (lag > 0), F.col('close') / lag - 1))
+        result = result.withColumn(f'ma_{n}d', F.when(complete, F.avg(F.when(close_ok, F.col('close'))).over(window)))
+    window60 = order.rowsBetween(-59, 0)
+    window20 = order.rowsBetween(-19, 0)
+    for n, window in ((20, window20), (60, window60)):
+        turnover_ok = valid & F.col('turnover').isNotNull() & (F.col('turnover') >= 0)
+        result = result.withColumn(f'avg_turnover_{n}d', F.when(
+            F.count(F.when(turnover_ok, 1)).over(window) == n, F.avg(F.when(turnover_ok, F.col('turnover'))).over(window)))
+    result = result.withColumn('volatility_60d_annualized', F.when(
+        F.count('return_1d').over(window60) == 60, F.stddev_samp('return_1d').over(window60) * F.sqrt(F.lit(252.0))))
+    prior_amount = F.avg(F.when(valid, F.col('amount'))).over(order.rowsBetween(-40, -21))
+    prior_count = F.count(F.when(valid & F.col('amount').isNotNull() & (F.col('amount') >= 0), 1)).over(order.rowsBetween(-40, -21))
+    result = result.withColumn('amount_change_20d', F.when((prior_count == 20) & (prior_amount > 0), F.col('avg_amount_20d') / prior_amount - 1))
+    close_ok = valid & F.col('close').isNotNull() & (F.col('close') > 0)
+    result = result.withColumn('_closes_60d', F.collect_list(F.when(close_ok, F.col('close'))).over(window60))
+    # Aggregate in chronological order so each trough is compared only to earlier peaks.
+    result = result.withColumn('max_drawdown_60d', F.when(F.size('_closes_60d') == 60, F.expr("""aggregate(
+        _closes_60d, named_struct('peak', cast(0 as double), 'drawdown', cast(0 as double)),
+        (acc, x) -> named_struct('peak', greatest(acc.peak, cast(x as double)),
+          'drawdown', greatest(acc.drawdown, 1D - cast(x as double) / greatest(acc.peak, cast(x as double)))),
+        acc -> acc.drawdown)"""))).drop('_closes_60d')
+    percentile_fields = ('return_1d', 'return_5d', 'return_20d', 'return_60d', 'return_120d',
+                         'volatility_20d_annualized', 'volatility_60d_annualized', 'max_drawdown_60d',
+                         'amount', 'avg_amount_20d', 'amount_change_20d', 'turnover', 'avg_turnover_20d', 'avg_turnover_60d')
+    for field in percentile_fields:
+        rank_window = Window.partitionBy('trading_date', F.col(field).isNull()).orderBy(F.col(field))
+        result = result.withColumn(f'{field}_percentile', F.when(F.col(field).isNotNull(), F.percent_rank().over(rank_window)))
     metrics = ('close', 'volume', 'amount', 'turnover', 'return_1d', 'return_5d', 'return_20d',
                'avg_amount_5d', 'avg_amount_20d', 'ma_5d', 'ma_20d', 'price_ma_5d_deviation',
                'price_ma_20d_deviation', 'volatility_20d_annualized', 'avg_volume_5d', 'volume_ratio_5d')
@@ -63,6 +96,9 @@ def build_cross_section(bars):
                          'avg_amount_1d', 'avg_amount_5d', 'avg_amount_20d',
                          'ma_5d', 'ma_20d', 'price_ma_5d_deviation', 'price_ma_20d_deviation',
                          'volatility_20d_annualized', 'avg_volume_5d', 'volume_ratio_5d', 'data_status',
+                         'return_60d', 'return_120d', 'ma_60d', 'ma_120d', 'volatility_60d_annualized',
+                         'max_drawdown_60d', 'avg_turnover_20d', 'avg_turnover_60d', 'amount_change_20d',
+                         *[f'{field}_percentile' for field in percentile_fields],
                          F.current_timestamp().alias('built_at'))
 
 
@@ -123,6 +159,12 @@ def main():
             raise ValueError(f'Cross section is empty; existing table preserved; stage={stage}')
         if staged.groupBy('security_id', 'trading_date').count().filter('count > 1').limit(1).count():
             raise ValueError(f'Duplicate cross-section business keys; stage={stage}')
+        invalid = (F.col('max_drawdown_60d') < 0) | (F.col('max_drawdown_60d') > 1)
+        percentile_fields = [name for name in staged.columns if name.endswith('_percentile')]
+        for name in percentile_fields:
+            invalid = invalid | (F.col(name) < 0) | (F.col(name) > 1)
+        if staged.filter(invalid).limit(1).count():
+            raise ValueError(f'Invalid factor values; stage={stage}')
         if spark.catalog.tableExists(args.target_table):
             old = spark.table(args.target_table)
             old_columns = ('close', 'volume', 'amount', 'turnover', 'return_1d', 'return_5d',

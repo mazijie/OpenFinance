@@ -22,6 +22,9 @@ def test_screen_and_overview_endpoints(monkeypatch):
     response = client.get('/api/market/gold/screen', params={'sort_by': 'return_5d', 'limit': 2, 'symbol': '600519.sh'})
     assert response.status_code == 200
     assert calls[0]['symbol'] == '600519.SH'
+    response = client.get('/api/market/gold/screen', params={'filters': '[{"field":"return_60d","min":0.1}]'})
+    assert response.status_code == 200 and calls[-1]['filters'] == [{'field': 'return_60d', 'min': 0.1}]
+    assert client.get('/api/market/gold/screen', params={'filters': '{bad'}).status_code == 422
     assert client.get('/api/market/gold/screen', params={'symbol': 'x' * 17}).status_code == 422
     assert client.get('/api/market/gold/screen', params={'sort_by': 'invalid'}).status_code == 422
     assert client.get('/api/market/gold/ranking', params={'period': 'year'}).json()['period'] == 'year'

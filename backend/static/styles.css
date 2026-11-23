@@ -565,3 +565,8 @@ button:focus-visible, a:focus-visible, summary:focus-visible, input:focus-visibl
 .ranking-controls { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; }
 .ranking-controls .ranking-tabs { margin-top: 0; }
 .ranking-controls .ranking-sides { margin: 3px 0; }
+
+.factor-screen { padding: 20px; margin-top: 16px; }
+.factor-controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin: 10px 0; }
+.factor-controls label { display: flex; flex-direction: column; gap: 4px; }
+.factor-controls input, .factor-controls select { max-width: 190px; padding: 7px; }

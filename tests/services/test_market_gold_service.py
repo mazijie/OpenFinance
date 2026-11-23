@@ -100,3 +100,25 @@ def test_year_negative_ranking_filters_losses_and_sorts_ascending():
 def test_ranking_rejects_invalid_side():
     with pytest.raises(ValueError):
         MarketGoldService(Reader()).ranking(period='year', side='unknown', as_of=datetime.now(UTC))
+
+
+def test_combined_filters_are_parameterized():
+    reader = Reader()
+    service = MarketGoldService(reader)
+    service.screen(as_of=datetime.now(UTC), trading_date=date(2026, 1, 5), sort_by='return_60d_percentile',
+                   filters=[{'field': 'volatility_60d_annualized_percentile', 'max': .1},
+                            {'field': 'avg_amount_20d', 'min': 1000}])
+    sql, args = reader.calls[-1]
+    assert '`volatility_60d_annualized_percentile` <= %s' in sql
+    assert '`avg_amount_20d` >= %s' in sql
+    assert args == (date(2026, 1, 5), .1, 1000, 20)
+
+
+@pytest.mark.parametrize('filters', [
+    [{'field': 'x` OR 1=1', 'min': 1}], [{'field': 'return_60d'}],
+    [{'field': 'return_60d_percentile', 'max': 1.1}], [{'field': 'return_60d', 'min': 2, 'max': 1}],
+    [{'field': 'return_60d', 'min': float('nan')}],
+])
+def test_invalid_combined_filters_rejected(filters):
+    with pytest.raises(ValueError):
+        MarketGoldService(Reader()).screen(as_of=datetime.now(UTC), filters=filters)

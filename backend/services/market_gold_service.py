@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+import math
 from typing import Literal
 
 from backend.lakehouse.starrocks_daily_reader import StarRocksDailyReader
@@ -10,6 +11,12 @@ TABLE = 'gold_market_cross_section'
 SORT_FIELDS = ('return_1d', 'return_5d', 'return_20d', 'amount', 'avg_amount_1d', 'avg_amount_5d', 'avg_amount_20d',
                'ma_5d', 'ma_20d', 'price_ma_5d_deviation', 'price_ma_20d_deviation',
                'volatility_20d_annualized', 'avg_volume_5d', 'volume_ratio_5d')
+EXTRA_FIELDS = ('turnover', 'return_60d', 'return_120d', 'ma_60d', 'ma_120d', 'volatility_60d_annualized',
+                'max_drawdown_60d', 'avg_turnover_20d', 'avg_turnover_60d', 'amount_change_20d')
+PERCENTILE_BASES = ('return_1d', 'return_5d', 'return_20d', 'return_60d', 'return_120d',
+                    'volatility_20d_annualized', 'volatility_60d_annualized', 'max_drawdown_60d',
+                    'amount', 'avg_amount_20d', 'amount_change_20d', 'turnover', 'avg_turnover_20d', 'avg_turnover_60d')
+SORT_FIELDS = SORT_FIELDS + EXTRA_FIELDS + tuple(f'{field}_percentile' for field in PERCENTILE_BASES)
 METHOD = '指标按最近行情记录计算，成交量比使用此前五条记录；数据不足时相关指标为空，缺失交易日可能使实际跨度变长。历史数据使用当前已知版本。'
 
 
@@ -21,13 +28,30 @@ class MarketGoldService:
     def screen(self, *, as_of: datetime, trading_date: date | None = None,
                sort_by: str = 'return_1d', direction: Literal['asc', 'desc'] = 'desc',
                limit: int = 20, min_value: float | None = None, max_value: float | None = None,
-               symbol: str | None = None, return_sign: Literal['positive', 'negative'] | None = None):
+               symbol: str | None = None, return_sign: Literal['positive', 'negative'] | None = None,
+               filters: list[dict] | None = None):
         if sort_by not in SORT_FIELDS or direction not in ('asc', 'desc') or not 1 <= limit <= 100:
             raise ValueError('Invalid market screen parameters')
         if min_value is not None and max_value is not None and min_value > max_value:
             raise ValueError('min_value must not exceed max_value')
         if return_sign not in (None, 'positive', 'negative'):
             raise ValueError('Invalid return sign')
+        conditions = []
+        if filters is not None and (not isinstance(filters, list) or len(filters) > 20):
+            raise ValueError('filters must be a list of at most 20 conditions')
+        for item in filters or []:
+            if not isinstance(item, dict) or set(item) - {'field', 'min', 'max'} or item.get('field') not in SORT_FIELDS:
+                raise ValueError('Invalid filter field')
+            lower, upper = item.get('min'), item.get('max')
+            if lower is None and upper is None:
+                raise ValueError('Filter requires a bound')
+            if any(isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x) for x in (lower, upper) if x is not None):
+                raise ValueError('Filter bounds must be finite numbers')
+            if lower is not None and upper is not None and lower > upper:
+                raise ValueError('Filter minimum exceeds maximum')
+            if item['field'].endswith('_percentile') and any(x < 0 or x > 1 for x in (lower, upper) if x is not None):
+                raise ValueError('Percentile bounds must be between 0 and 1')
+            conditions.append((item['field'], lower, upper))
         table = self.reader._table(None, TABLE)
         date_sql = f'SELECT MAX(`trading_date`) AS `day` FROM {table} WHERE `trading_date` <= %s'
         date_args = [trading_date or as_of.date()]
@@ -51,6 +75,11 @@ class MarketGoldService:
             if value is not None:
                 where.append(f'`{sort_by}` {operator} %s')
                 args.append(value)
+        for field, lower, upper in conditions:
+            for operator, bound in (('>=', lower), ('<=', upper)):
+                if bound is not None:
+                    where.append(f'`{field}` {operator} %s')
+                    args.append(bound)
         sql = f'SELECT * FROM {table} WHERE ' + ' AND '.join(where) + f' ORDER BY `{sort_by}` {direction.upper()}, `security_id` ASC LIMIT %s'
         args.append(limit)
         rows = self.reader._query(sql, tuple(args))
